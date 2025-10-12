@@ -2,7 +2,7 @@
 
 Have you ever meticulously organized your digital comic collection into a perfect folder structure, only to import it into a media server like [Kavita](https://www.kavita.zip/) and watch it get dumped onto the digital floor in one giant, unsorted pile?
 
-The problem is usually missing metadata. While powerful tools like [Comic Tagger](https://github.com/comictagger/comictagger) exist, they often require manual intervention to get started. To get reliable results, you have to search for each series by hand—an impossible task when you have thousands of comics.
+The problem is usually missing metadata. While powerful tools like [Comic Tagger](https://github.com/comictagger/comictagger) exist, they often require manual intervention to get started. To get reliable results, you have to search for each series by hand, an impossible task when you have thousands of comics.
 
 This project was created to solve that exact problem. I automated it.
 
