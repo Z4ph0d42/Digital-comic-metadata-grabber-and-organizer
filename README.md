@@ -1,12 +1,18 @@
 # Automated Comic Archiving and Tagging Workflow for Kavita
 
-This project provides a script and a workflow to automatically process a comic library for use with a media server like [Kavita](https://www.kavita.zip/). It is designed to solve two specific problems:
-1.  Comic issues that are stored as folders of images (e.g., `.jpg` files) instead of `.cbz` archives.
-2.  Inconsistent naming that makes it difficult for metadata scrapers to identify series and issues automatically.
+Have you ever meticulously organized your digital comic collection into a perfect folder structure, only to import it into a media server like [Kavita](https://www.kavita.zip/) and watch it get dumped onto the digital floor in one giant, unsorted pile?
+
+The problem is usually missing metadata. While powerful tools like [Comic Tagger](https://github.com/comictagger/comictagger) exist, they often require manual intervention to get started. To get reliable results, you have to search for each series by hand—an impossible task when you have thousands of comics.
+
+This project was created to solve that exact problem. I automated it.
+
+This workflow uses the folder structure you *already have* as a guide. The included Python script intelligently parses your series and issue folders, feeds that information to the Comic Tagger CLI, and automates the entire process of archiving, tagging, and renaming your collection. It turns a week-long manual job into a script you can run overnight.
+
+## What It Does
 
 The Python script (`process_comics.py`) automates a two-stage process:
--   **Stage 1 (Archive):** It scans the comic library, finds issue folders containing images, and compresses each one into a new `.cbz` file, deleting the original folder on success.
--   **Stage 2 (Tag & Rename):** It then uses the [Comic Tagger](https://github.com/comictagger/comictagger) Command Line Interface (CLI) to accurately fetch metadata from Comic Vine, embed it into the `.cbz` file, and rename the file to a clean, standardized format.
+-   **Stage 1 (Archive):** It scans the comic library, finds issue folders containing images (e.g., `.jpg` files), and compresses each one into a new `.cbz` file, deleting the original folder on success.
+-   **Stage 2 (Tag & Rename):** It then uses the Comic Tagger Command Line Interface (CLI) to accurately fetch metadata from Comic Vine, embed it into the `.cbz` file, and rename the file to a clean, standardized format.
 
 Any files that cannot be automatically parsed are logged to `skipped_files.log` for manual review.
 
