@@ -1,0 +1,60 @@
+#!/bin/bash
+#
+# This script automates the installation of Comic Tagger and its dependencies
+# for the kavita-tagger-workflow project on a Debian-based system.
+#
+
+# Exit immediately if any command fails
+set -e
+
+echo "=== Starting Comic Tagger Setup Script ==="
+echo "This will install system packages, create a Python virtual environment, and install Comic Tagger."
+echo ""
+
+# --- Define Paths ---
+# The script will create this directory in your home folder.
+PROJECT_DIR="$HOME/comictagger_project"
+VENV_DIR="$PROJECT_DIR/venv"
+REPO_DIR="$PROJECT_DIR/comictagger_repo"
+
+# --- Step 1: Install System Dependencies ---
+echo "[1/4] Updating system packages and installing dependencies..."
+echo "You may be prompted for your password to install packages."
+sudo apt-get update
+# The -y flag automatically answers "yes" to prompts.
+sudo apt-get install -y python3 python3-pip python3-venv git unrar python3-pyqt6 pyqt6-dev-tools
+
+# --- Step 2: Create Project Directories ---
+echo "[2/4] Creating project directory at $PROJECT_DIR..."
+mkdir -p "$PROJECT_DIR"
+
+# --- Step 3: Set up Python Virtual Environment ---
+echo "[3/4] Creating Python virtual environment..."
+# The --system-site-packages flag is crucial for using the system's PyQt6.
+python3 -m venv --system-site-packages "$VENV_DIR"
+
+# --- Step 4: Install Comic Tagger ---
+echo "[4/4] Cloning Comic Tagger repository and installing with pip..."
+# Check if the repo already exists before cloning
+if [ -d "$REPO_DIR" ]; then
+    echo "Comic Tagger repository already exists. Skipping clone."
+else
+    git clone https://github.com/comictagger/comictagger.git "$REPO_DIR"
+fi
+
+# Install the package using the venv's specific pip executable.
+# This is the correct way to do it inside a script without `source`.
+"$VENV_DIR/bin/pip" install "$REPO_DIR"
+
+echo ""
+echo "=== Installation Complete! ==="
+echo ""
+echo "The necessary tools have been installed in: $PROJECT_DIR"
+echo ""
+echo "To activate the virtual environment for your terminal session, run:"
+echo "source $VENV_DIR/bin/activate"
+echo ""
+echo "NEXT STEPS:"
+echo "1. Get your personal Comic Vine API key."
+echo "2. Edit the configuration variables at the top of the 'process_comics.py' script."
+echo "3. Run the script to process your library!"
