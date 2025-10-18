@@ -6,18 +6,11 @@ The problem is usually missing metadata. While powerful tools like [Comic Tagger
 
 This project was created to solve that exact problem. I automated it.
 
-This workflow uses the folder structure you *already have* as a guide. It sets up a fully automated "inbox" system. You simply drop new, unprocessed comics into a folder, and a scheduled script handles the rest. It turns a manual chore into a "set it and forget it" solution.
+This workflow uses the folder structure you *already have* as a guide. It provides two main scripts:
+1.  `process_full_library.py`: A powerful, one-time script to convert your entire existing library of unprocessed comics into a perfectly tagged and organized collection.
+2.  `process_inbox.py`: A script designed to be run on a schedule, which automatically processes new comics dropped into an "inbox" folder and adds them to your library and Kavita.
 
-## What It Does
-
-The Python script (`process_inbox.py`) runs on a schedule and automates a four-stage process for any new comics it finds:
-
-1.  **Archive:** It scans the "inbox" for issue folders containing images (e.g., `.jpg` files) and compresses each one into a new `.cbz` file, deleting the original folder on success.
-2.  **Tag & Rename:** It uses the [Comic Tagger](https://github.com/comictagger/comictagger) CLI to fetch metadata from Comic Vine, embed it into the archive, and rename the file to a clean, standardized format.
-3.  **Move:** It moves the newly processed comic folders from the inbox into your main library directory, merging them if the series already exists.
-4.  **Scan:** It triggers an incremental library scan in Kavita via its API, so your new comics appear automatically.
-
-Any files that cannot be automatically parsed are logged to `inbox_skipped.log` for manual review.
+Any files that cannot be automatically parsed are logged for manual review.
 
 ## Installation
 
@@ -49,83 +42,54 @@ These instructions are for a Debian-based system (e.g., Raspberry Pi OS, Debian,
     pip install requests
     ```
 
-## The Workflow: Setting Up Your Automated Inbox
+## The Workflow
 
-### Step 1: Create the Inbox Folder
+The workflow is divided into two parts: a one-time setup for your existing library, and then the ongoing automation for new comics.
 
-On your server, create a dedicated folder where you will drop new comics. This should be separate from your main library but can be on the same drive.
+### Part 1: Initial Library Conversion
 
-```bash
-# Example:
-mkdir -p /mnt/kavitacomics/inbox
-```
+Use the `process_full_library.py` script for this.
 
-### Step 2: Get Your API Keys
-
-You will need two API keys for the script to function.
-
-1.  **Comic Vine API Key:**
+1.  **Get Your Comic Vine API Key:**
     *   Sign up for a free account at [comicvine.gamespot.com/api/](https://comicvine.gamespot.com/api/).
-    *   Copy the API key provided.
-    *   On your server, save this key into a plain text file (e.g., `/home/user/.comic_vine_api_key`).
+    *   Copy the API key provided and save it to a plain text file on your server (e.g., `/home/user/.comic_vine_api_key`).
 
-2.  **Kavita API Key:**
-    *   Log into your Kavita web interface.
-    *   Click your user icon in the top right and go to **My Profile**.
-    *   Under the "API Key" section, copy your key.
+2.  **Configure the Script:**
+    *   Edit the configuration variables at the top of the `process_full_library.py` script to match your system's paths.
+    *   **Crucially, leave `DRY_RUN = True` for the first run.**
 
-### Step 3: Configure the Inbox Script
+3.  **Execute the Script:**
+    *   Activate the virtual environment: `source ~/comictagger_project/venv/bin/activate`
+    *   Run a **Dry Run** to test: `python3 /path/to/your/process_full_library.py`
+    *   If the output looks correct, change `DRY_RUN` to `False` in the script and run it again to process your entire library. This will take a long time.
 
-Before running, you **must** edit the configuration variables at the top of the `process_inbox.py` script:
+4.  **Final Kavita Scan:**
+    *   Once the script finishes, go to your Kavita web UI, **Delete** and **Re-add** your comics library to ensure a clean import.
 
--   `INBOX_DIR`: The absolute path to the "inbox" folder you created in Step 1.
--   `LIBRARY_DIR`: The absolute path to your main comic library where processed comics should be moved.
--   `COMIC_TAGGER_EXE`: The path to the `comictagger` executable. The install script places this at `~/comictagger_project/venv/bin/comictagger`.
--   `API_KEY_FILE`: The absolute path to the file where you saved your Comic Vine API key.
--   `KAVITA_API_KEY`: Paste the key you copied from your Kavita profile here.
--   `SKIPPED_FILES_LOG`: The path where you want the log file for skipped files to be saved.
+### Part 2: Ongoing Automation with the Inbox
 
-### Step 4: Test the Script Manually
+Use the `process_inbox.py` script for this.
 
-Before automating, it's wise to test the script once.
+1.  **Create an Inbox Folder** on your server where you will drop new comics (e.g., `/path/to/your/inbox`).
 
-1.  **Drop a new comic folder** into your `inbox` directory.
-2.  **Activate the Virtual Environment** in your terminal:
-    ```bash
-    source ~/comictagger_project/venv/bin/activate
-    ```
-3.  **Run the script:**
-    ```bash
-    python3 /path/to/your/process_inbox.py
-    ```
-    Watch the output. The script should find the comic, archive it, tag it, move it, and trigger a Kavita scan. Check your Kavita library to see if the new comic appears.
+2.  **Get Your Kavita API Key:**
+    *   In your Kavita UI, go to **My Profile** and copy your API Key.
 
-### Step 5: Automate with Cron (The Scheduler)
+3.  **Configure the Script:**
+    *   Edit the configuration variables at the top of the `process_inbox.py` script, including your paths and pasting in your Kavita API key.
 
-Once you've confirmed the script works, you can schedule it to run automatically.
+4.  **Test the Script Manually:**
+    *   Drop a new comic folder into your `inbox`.
+    *   Activate the virtual environment and run `python3 /path/to/your/process_inbox.py`.
+    *   Check if the comic is processed correctly and appears in Kavita.
 
-1.  **Open the cron editor:**
-    ```bash
-    crontab -e
-    ```
-    *(If it's your first time, select `nano` as your editor).*
-
-2.  **Add the scheduled job:**
-    Scroll to the bottom of the file and add the following line. This example runs the script every night at 3:00 AM.
-    ```
-    0 3 * * * /home/user/comictagger_project/venv/bin/python3 /path/to/your/process_inbox.py >> /home/user/inbox_processing.log 2>&1
-    ```
-    *   **Important:** Make sure to use the correct absolute paths for your user.
-    *   `>> /home/user/inbox_processing.log 2>&1` saves all script output to a log file for easy troubleshooting.
-
-3.  Save and exit the editor. The cron job is now active.
-
-### Your Daily Workflow
-
-Your setup is complete. From now on, your workflow is simple:
-1.  Download a new comic.
-2.  Drag and drop the unprocessed folder into your `inbox`.
-3.  The scheduled script will handle the rest overnight.
+5.  **Automate with Cron (The Scheduler):**
+    *   Open the cron editor: `crontab -e`
+    *   Add a line to schedule the script. This example runs it every night at 3:00 AM:
+        ```
+        0 3 * * * /home/user/comictagger_project/venv/bin/python3 /path/to/your/process_inbox.py >> /home/user/inbox_processing.log 2>&1
+        ```
+    *   Save and exit. Your automated system is now live.
 
 ## License
 
