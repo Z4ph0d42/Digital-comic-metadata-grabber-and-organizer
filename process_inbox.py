@@ -1,4 +1,5 @@
 import os
+<<<<<<< Updated upstream
 import re
 import subprocess
 import sys
@@ -29,10 +30,34 @@ SKIPPED_FILES_LOG = "/home/user/inbox_skipped.log"
 
 def get_api_key():
     """Reads the Comic Vine API key from the specified file."""
+=======
+import subprocess
+import shutil
+import sys
+
+# --- CONFIGURATION ---
+# The directory where you place new, unsorted comic folders.
+INBOX_DIR = "/path/to/your/comics/inbox"
+# The main directory of your comic library.
+LIBRARY_DIR = "/path/to/your/comics"
+# Full path to the comictagger executable inside your virtual environment.
+COMIC_TAGGER_EXE = "/home/<YOUR_USERNAME>/comictagger_project/bin/comictagger"
+# The location of your ComicVine API key file.
+API_KEY_FILE = "/home/<YOUR_USERNAME>/.comic_vine_api_key"
+
+# --- KAVITA CONFIGURATION ---
+# The base URL of your Kavita instance.
+KAVITA_BASE_URL = "http://localhost:5000"
+# Your Kavita API Key (get this from Kavita's Server Settings -> API Key).
+KAVITA_API_KEY = "YOUR_KAVITA_API_KEY_HERE"
+
+def get_comicvine_api_key():
+>>>>>>> Stashed changes
     try:
         with open(os.path.expanduser(API_KEY_FILE), 'r') as f:
             return f.read().strip()
     except FileNotFoundError:
+<<<<<<< Updated upstream
         return None
 
 def log_skipped_file(filepath, reason):
@@ -161,6 +186,75 @@ def process_inbox():
         trigger_kavita_scan()
     else:
         print("--- No new comics to process. ---")
+=======
+        print(f"ERROR: ComicVine API Key file not found at {API_KEY_FILE}")
+        return None
+
+def process_inbox():
+    """
+    Scans the inbox for new series, tags them using comictagger, moves them
+    to the main library, and triggers a Kavita library scan.
+    If tagging fails, it moves the folder anyway for manual curation later.
+    """
+    cv_api_key = get_comicvine_api_key()
+    if not cv_api_key:
+        sys.exit("Could not find ComicVine API key. Aborting.")
+
+    if not os.path.exists(INBOX_DIR):
+        os.makedirs(INBOX_DIR)
+        print(f"Inbox directory created at {INBOX_DIR}. Add new comic series folders here.")
+        return
+
+    series_folders = [f for f in os.listdir(INBOX_DIR) if os.path.isdir(os.path.join(INBOX_DIR, f))]
+    if not series_folders:
+        print("Inbox is empty. Nothing to do.")
+        return
+
+    print(f"Found {len(series_folders)} series to process in the inbox.")
+    
+    processed_at_least_one = False
+    for series_name in series_folders:
+        source_path = os.path.join(INBOX_DIR, series_name)
+        dest_path = os.path.join(LIBRARY_DIR, series_name)
+        
+        print("-" * 40)
+        print(f"Processing series: {series_name}")
+        
+        try:
+            command = [
+                COMIC_TAGGER_EXE, "-s", "-t", "CR", "-o", "-f", "-R",
+                "--cv-api-key", cv_api_key, source_path
+            ]
+            
+            result = subprocess.run(command, capture_output=True, text=True)
+            if result.returncode == 0:
+                print(f"Successfully tagged series '{series_name}'.")
+            else:
+                print(f"Warning: comictagger failed for '{series_name}'. The folder will be moved without metadata.")
+                print("--- ComicTagger Error Output ---\n" + result.stderr + "\n---------------------------------")
+        
+        finally:
+            # This block runs whether the 'try' succeeded or failed.
+            if os.path.exists(dest_path):
+                print(f"Warning: Series folder '{series_name}' already exists in the main library. Cannot move.")
+            else:
+                shutil.move(source_path, dest_path)
+                print(f"Moved '{series_name}' to the main library.")
+                processed_at_least_one = True
+
+    # After processing all folders, tell Kavita to scan if we moved anything
+    if processed_at_least_one and KAVITA_API_KEY != "YOUR_KAVITA_API_KEY_HERE":
+        print("-" * 40)
+        print("Telling Kavita to scan the library...")
+        
+        scan_command = ["curl", "-X", "POST", f"{KAVITA_BASE_URL}/api/Library/Scan", "-H", f"X-Api-Key: {KAVITA_API_KEY}"]
+        
+        try:
+            subprocess.run(scan_command, capture_output=True, text=True, check=True)
+            print("Kavita scan initiated successfully.")
+        except Exception as e:
+            print(f"ERROR: Could not trigger Kavita scan. Is the URL and API key correct? Error: {e}")
+>>>>>>> Stashed changes
 
 if __name__ == "__main__":
     process_inbox()
