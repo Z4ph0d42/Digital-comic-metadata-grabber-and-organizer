@@ -40,17 +40,18 @@ System Tools
 You must have unrar installed for .cbr file support.
 
 # On Debian/Ubuntu
+```bash
 sudo apt-get update && sudo apt-get install unrar
-
+```
 
 Python Environment
 
 It is highly recommended to use a Python virtual environment.
-
+```bash
 python3 -m venv venv
 source venv/bin/activate
 pip install rarfile PyMuPDF
-
+```
 
 ComicTagger
 
@@ -73,27 +74,27 @@ Step 1: Perform the Initial Library Scan (One Time Only)
 
 Before you can process new comics, you must build a database of your existing collection.
 This allows the script to detect duplicates.
-
+```bash
 python3 build_library_db.py
-
+```
 
 Note: This will take a very long time for a large library. Let it finish completely.
 
 Step 2: Process New Comics
 
 Whenever you have new comics, place them in your INBOX_DIR and run the main script.
-
+```bash
 python3 process_inbox.py
-
+```
 
 The script will provide detailed output on its actions for each file.
 
 Step 3: Manage Quarantined Files
 
 If the script moves any files to your QUARANTINE_DIR, you can review them with the interactive management tool.
-
+```bash
 python3 manage_quarantine.py
-
+```
 
 This tool will allow you to:
 
