@@ -92,9 +92,9 @@ Setup and Installation
 Step 3: Manage Quarantined Files
 
     If the script moves any files to your QUARANTINE_DIR, you can review them with the interactive management tool.
-    ```bash
+```bash
     python3 manage_quarantine.py
-    ```
+```
 
     This tool will allow you to:
 
