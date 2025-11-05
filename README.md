@@ -34,6 +34,7 @@ You must have `unrar` installed for `.cbr` file support.
 ```bash
 # On Debian/Ubuntu
 sudo apt-get update && sudo apt-get install unrar
+```
 Python Environment:
 It is highly recommended to use a Python virtual environment.
 code
