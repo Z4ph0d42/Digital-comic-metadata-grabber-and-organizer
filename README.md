@@ -29,6 +29,7 @@ The system is designed around a simple, multi-stage workflow:
 This project relies on a few external tools and Python libraries.
 
 **System Tools:**
+
 You must have `unrar` installed for `.cbr` file support.
 ```bash
 # On Debian/Ubuntu
@@ -44,11 +45,11 @@ ComicTagger:
 This script uses the command-line version of comictagger. Follow its installation instructions to install it within your virtual environment. You will also need to get a free API key from ComicVine and place it in a file.
 2. Configuration
 Before running, you must edit the configuration variables at the top of each of the three main Python scripts (process_inbox.py, build_library_db.py, manage_quarantine.py).
-INBOX_DIR: The full path to your "new comics" folder.
-LIBRARY_DIR: The full path to your main comic library.
-QUARANTINE_DIR: The full path to a folder where problem comics will be moved.
-COMIC_TAGGER_EXE: The full path to your comictagger executable inside your virtual environment.
-API_KEY_FILE: The full path to the file containing your ComicVine API key.
+`INBOX_DIR`: The full path to your "new comics" folder.
+`LIBRARY_DIR`: The full path to your main comic library.
+`QUARANTINE_DIR`: The full path to a folder where problem comics will be moved.
+`COMIC_TAGGER_EXE`: The full path to your comictagger executable inside your virtual environment.
+`API_KEY_FILE`: The full path to the file containing your ComicVine API key.
 Usage
 Step 1: Perform the Initial Library Scan (One Time Only)
 Before you can process new comics, you must build a database of your existing collection. This allows the script to detect duplicates.
