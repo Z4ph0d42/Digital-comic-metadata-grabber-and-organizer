@@ -33,73 +33,73 @@ Manage Quarantine – For any files the script couldn't handle (e.g., ambiguous 
 Setup and Installation
 1. Dependencies
 
-This project relies on a few external tools and Python libraries.
+    This project relies on a few external tools and Python libraries.
 
-System Tools
+    System Tools
 
-You must have unrar installed for .cbr file support.
+    You must have unrar installed for .cbr file support.
 
-# On Debian/Ubuntu
-```bash
-sudo apt-get update && sudo apt-get install unrar
-```
+    # On Debian/Ubuntu
+    ```bash
+    sudo apt-get update && sudo apt-get install unrar
+    ```
 
-Python Environment
+    Python Environment
 
-It is highly recommended to use a Python virtual environment.
-```bash
-python3 -m venv venv
-source venv/bin/activate
-pip install rarfile PyMuPDF
-```
+    It is highly recommended to use a Python virtual environment.
+    ```bash
+    python3 -m venv venv
+    source venv/bin/activate
+    pip install rarfile PyMuPDF
+    ```
 
-ComicTagger
+    ComicTagger
 
-This script uses the command-line version of comictagger.
-Follow its installation instructions to install it within your virtual environment.
-You will also need to get a free API key from ComicVine and place it in a file.
+    This script uses the command-line version of comictagger.
+    Follow its installation instructions to install it within your virtual environment.
+    You will also need to get a free API key from ComicVine and place it in a file.
 
 2. Configuration
 
-Before running, you must edit the configuration variables at the top of each of the three main Python scripts (process_inbox.py, build_library_db.py, manage_quarantine.py).
+    Before running, you must edit the configuration variables at the top of each of the three main Python scripts (process_inbox.py, build_library_db.py, manage_quarantine.py).
 
-INBOX_DIR         – The full path to your "new comics" folder.
-LIBRARY_DIR       – The full path to your main comic library.
-QUARANTINE_DIR    – The full path to a folder where problem comics will be moved.
-COMIC_TAGGER_EXE  – The full path to your comictagger executable inside your virtual environment.
-API_KEY_FILE      – The full path to the file containing your ComicVine API key.
+    INBOX_DIR         – The full path to your "new comics" folder.
+    LIBRARY_DIR       – The full path to your main comic library.
+    QUARANTINE_DIR    – The full path to a folder where problem comics will be moved.
+    COMIC_TAGGER_EXE  – The full path to your comictagger executable inside your virtual environment.
+    API_KEY_FILE      – The full path to the file containing your ComicVine API key.
 
-Usage
-Step 1: Perform the Initial Library Scan (One Time Only)
+    Usage
+    Step 1: Perform the Initial Library Scan (One Time Only)
 
-Before you can process new comics, you must build a database of your existing collection.
-This allows the script to detect duplicates.
-```bash
-python3 build_library_db.py
-```
+    Before you can process new comics, you must build a database of your existing collection.
+    This allows the script to detect duplicates.
+    ```bash
+    python3 build_library_db.py
+    ```
 
-Note: This will take a very long time for a large library. Let it finish completely.
+    Note: This will take a very long time for a large library. Let it finish completely.
 
-Step 2: Process New Comics
+    Step 2: Process New Comics
 
-Whenever you have new comics, place them in your INBOX_DIR and run the main script.
-```bash
-python3 process_inbox.py
-```
+    Whenever you have new comics, place them in your INBOX_DIR and run the main script.
+    ```bash
+    python3 process_inbox.py
+    ```
 
-The script will provide detailed output on its actions for each file.
+    The script will provide detailed output on its actions for each file.
 
 Step 3: Manage Quarantined Files
 
-If the script moves any files to your QUARANTINE_DIR, you can review them with the interactive management tool.
-```bash
-python3 manage_quarantine.py
-```
+    If the script moves any files to your QUARANTINE_DIR, you can review them with the interactive management tool.
+    ```bash
+    python3 manage_quarantine.py
+    ```
 
-This tool will allow you to:
+    This tool will allow you to:
 
-(F)ix – Interactively rename a comic with an ambiguous name and send it back to the inbox.
+    (F)ix – Interactively rename a comic with an ambiguous name and send it back to the inbox.
 
-(K)eep – Move a file back to the inbox as-is.
+    (K)eep – Move a file back to the inbox as-is.
 
-(D)elete – Permanently delete a duplicate or unwanted file.
+    (D)elete – Permanently delete a duplicate or unwanted file.
