@@ -1,106 +1,92 @@
-Digital Comic Metadata Grabber and Organizer
+# Digital Comic Organizer & Metadata Grabber
 
-This project provides a suite of Python scripts to create a powerful, automated pipeline for processing a digital comic book library. It intelligently tags, renames, and organizes new comics, while also detecting duplicates, converting formats, and handling errors safely.
+A robust, automated Python toolset designed to organize digital comic collections (CBZ, CBR, PDF) and loose image folders. It identifies comics using **ComicTagger** (ComicVine API), organizes them into a standardized folder structure, and handles duplicates and errors intelligently.
 
-The core of the system is a script that watches an "inbox" directory, processes new files one-by-one, and moves them into a clean, organized library structure suitable for use with media servers like Kavita.
+Designed for self-hosted libraries like **Kavita** or **Komga**.
 
-Key Features
+## Features
 
-Automated Inbox Processing – Simply drop new comic files into the inbox and run the script.
+*   **Smart Organization:** Moves comics from an Inbox to a Library using the format: `Publisher/Series vVol/Series #Issue (Year).ext`.
+*   **Safe Fallback Mode:** If a comic cannot be identified (or has ambiguous matches), it is **not** discarded. It is moved to the Library preserving its original folder/filename so you don't lose it.
+*   **Auto-Conversion:** Automatically detects folders containing loose images (`.jpg`, `.png`) and zips them into `.cbz` files before processing.
+*   **PDF & CBR Support:** Handles standard `.cbz`, `.cbr`, and `.pdf` comics.
+*   **Duplicate Detection:** Calculates SHA256 hashes of files to prevent importing exact duplicates, even if filenames differ.
+*   **Quarantine System:** Corrupt archives or unreadable files are moved to a Quarantine folder for manual inspection, ensuring the script never gets stuck.
+*   **Strict Filtering:** Ignores non-comic files (text files, system thumbnails) to keep your library clean.
 
-PDF to CBZ Conversion – Automatically converts PDF comics into the standard, metadata-compatible CBZ format.
+## Prerequisites
 
-Advanced Duplicate Detection – Uses a database of file hashes to detect and quarantine 100% identical duplicate issues, saving disk space.
+*   **Python 3.10+**
+*   **System Tools:** `unrar` (Required for CBR support)
+    *   *Debian/Ubuntu:* `sudo apt install unrar`
+*   **ComicVine API Key:** You need a free API key from [ComicVine](https://comicvine.gamespot.com/api/).
 
-Safe Quarantine System – Instead of deleting files it can't process, the script moves them to a quarantine folder. A separate management script allows for easy review, fixing, or deletion of these files.
+## Installation
 
-Intelligent Metadata Fallback – If the primary metadata tool (comictagger) fails to find a perfect match for a comic, the script falls back to parsing the filename to ensure the comic is still filed correctly in your library.
-
-Database-Driven Library – Maintains a lightweight SQLite database of your collection for fast and efficient duplicate checks.
-
-The Workflow
-
-The system is designed around a simple, multi-stage workflow:
-
-Initial Setup – Install dependencies and run the one-time library scan.
-
-Add New Comics – Place new, unsorted comic files (.cbz, .cbr, .pdf) into the inbox folder.
-
-Process Inbox – Run the main process_inbox.py script. It will automatically convert, tag, check for duplicates, and file everything it can.
-
-Manage Quarantine – For any files the script couldn't handle (e.g., ambiguous names, true duplicates), use the manage_quarantine.py script to easily fix, delete, or re-process them.
-
-Setup and Installation
-1. Dependencies
-
-    This project relies on a few external tools and Python libraries.
-
-    System Tools
-
-    You must have unrar installed for .cbr file support.
-
-    # On Debian/Ubuntu
+1.  **Clone the repository:**
     ```bash
-    sudo apt-get update && sudo apt-get install unrar
+    git clone https://github.com/Z4ph0d42/Digital-comic-metadata-grabber-and-organizer.git
+    cd Digital-comic-metadata-grabber-and-organizer
     ```
 
-    Python Environment
-
-    It is highly recommended to use a Python virtual environment.
+2.  **Create a Virtual Environment:**
     ```bash
     python3 -m venv venv
     source venv/bin/activate
-    pip install rarfile PyMuPDF
     ```
 
-    ComicTagger
-
-    This script uses the command-line version of comictagger.
-    Follow its installation instructions to install it within your virtual environment.
-    You will also need to get a free API key from ComicVine and place it in a file.
-
-2. Configuration
-
-    Before running, you must edit the configuration variables at the top of each of the three main Python scripts (process_inbox.py, build_library_db.py, manage_quarantine.py).
-
-    INBOX_DIR         – The full path to your "new comics" folder.
-    LIBRARY_DIR       – The full path to your main comic library.
-    QUARANTINE_DIR    – The full path to a folder where problem comics will be moved.
-    COMIC_TAGGER_EXE  – The full path to your comictagger executable inside your virtual environment.
-    API_KEY_FILE      – The full path to the file containing your ComicVine API key.
-
-    Usage
-    Step 1: Perform the Initial Library Scan (One Time Only)
-
-    Before you can process new comics, you must build a database of your existing collection.
-    This allows the script to detect duplicates.
+3.  **Install Python Dependencies:**
     ```bash
-    python3 build_library_db.py
+    pip install -r requirements.txt
     ```
 
-    Note: This will take a very long time for a large library. Let it finish completely.
+## Configuration
 
-    Step 2: Process New Comics
+Open `process_inbox.py` and update the **Configuration Section** at the top:
 
-    Whenever you have new comics, place them in your INBOX_DIR and run the main script.
-    ```bash
-    python3 process_inbox.py
-    ```
+```python
+# --- CONFIGURATION ---
+INBOX_DIR = "/path/to/comics/inbox"          # Where you dump new downloads
+LIBRARY_DIR = "/path/to/comics/library"      # Your organized Kavita/Komga root
+QUARANTINE_DIR = "/path/to/comics/quarantine" # Where corrupt files go
 
-    The script will provide detailed output on its actions for each file.
+# Path to ComicTagger (usually inside your venv/bin folder)
+COMIC_TAGGER_BIN = "/home/user/scripts/comic-organizer/venv/bin/comictagger"
 
-Step 3: Manage Quarantined Files
-
-    If the script moves any files to your QUARANTINE_DIR, you can review them with the interactive management tool.
-
-```bash
- python3 manage_quarantine.py
-```
-
-    This tool will allow you to:
-
-    (F)ix – Interactively rename a comic with an ambiguous name and send it back to the inbox.
-
-    (K)eep – Move a file back to the inbox as-is.
-
-    (D)elete – Permanently delete a duplicate or unwanted file.
+# Your API Key
+CV_API_KEY = "YOUR_COMICVINE_API_KEY"
+Repeat the path configuration for build_library_db.py and manage_quarantine.py.
+Usage
+1. Initialize the Database (Run Once)
+Before starting, scan your existing library (if any) to build the duplicate detection database.
+code
+Bash
+python3 build_library_db.py
+2. Process the Inbox (The Main Script)
+Run this whenever you add new comics to your Inbox folder.
+code
+Bash
+python3 process_inbox.py
+What it does:
+Scans INBOX_DIR.
+Converts any folders of images into .cbz files.
+Checks for duplicates against the database.
+Tags the comic using ComicTagger.
+Success: Moves file to LIBRARY_DIR/Publisher/Series...
+Ambiguous/Failed Tag: Moves file to LIBRARY_DIR/Original_Name (Fallback mode).
+Corrupt: Moves file to QUARANTINE_DIR.
+3. Manage Quarantine
+If files end up in Quarantine (e.g., corrupt archives), use this tool to view or restore them.
+code
+Bash
+python3 manage_quarantine.py
+Folder Structure
+The script expects and maintains this structure:
+code
+Text
+/Comics
+├── Inbox          <-- Drop your messy downloads here
+├── Library        <-- Clean, organized folders appear here
+└── Quarantine     <-- Broken files go here
+Contributing
+Feel free to submit issues or pull requests.

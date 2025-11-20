@@ -1,61 +1,75 @@
 import os
 import sqlite3
 import hashlib
-import zipfile
-import rarfile
-import xml.etree.ElementTree as ET
-import sys
 
 # --- CONFIGURATION ---
-LIBRARY_DIR = "/path/to/your/comic_library"
-INBOX_DIR = "/path/to/your/inbox" # Must exclude this from the scan
-PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_FILE = os.path.join(PROJECT_DIR, "comics_library.db")
-# ---------------------
+LIBRARY_DIR = "/path/to/comics/library"
+DB_FILE = "library.db"
 
-def create_database():
-    conn = sqlite3.connect(DB_FILE); cursor = conn.cursor()
-    cursor.execute('CREATE TABLE IF NOT EXISTS comics (id INTEGER PRIMARY KEY, file_path TEXT UNIQUE, file_hash TEXT, file_size INTEGER, series_id TEXT, issue_id TEXT)')
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_hash ON comics(file_hash)')
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_metadata ON comics(series_id, issue_id)')
-    conn.commit(); return conn
+# Folders to ignore
+EXCLUDE_FOLDERS = {"inbox", "quarantine", "Inbox", "Quarantine", ".kavita", "System Volume Information"}
 
-def calculate_file_hash(file_path):
-    h=hashlib.md5();f=open(file_path,'rb');[h.update(c) for c in iter(lambda:f.read(4096),b"")];return h.hexdigest()
-
-def extract_metadata_from_archive(file_path):
-    series_id, issue_id = None, None
+def calculate_file_hash(filepath, block_size=65536):
+    sha256 = hashlib.sha256()
     try:
-        if file_path.lower().endswith('.cbz'):
-            with zipfile.ZipFile(file_path, 'r') as zf:
-                if 'ComicInfo.xml' in zf.namelist():
-                    with zf.open('ComicInfo.xml') as f:
-                        root = ET.fromstring(f.read()); series_id=root.findtext('.//{*}SeriesID'); issue_id=root.findtext('.//{*}IssueID')
-        elif file_path.lower().endswith('.cbr'):
-             with rarfile.RarFile(file_path, 'r') as rf:
-                if 'ComicInfo.xml' in rf.namelist():
-                    with rf.open('ComicInfo.xml') as f:
-                        root = ET.fromstring(f.read()); series_id=root.findtext('.//{*}SeriesID'); issue_id=root.findtext('.//{*}IssueID')
+        with open(filepath, 'rb') as f:
+            for block in iter(lambda: f.read(block_size), b''):
+                sha256.update(block)
+        return sha256.hexdigest()
     except Exception as e:
-        print(f"  [Warning] {os.path.basename(file_path)}: {e}")
-    return series_id, issue_id
+        print(f"Skipping {filepath}: {e}")
+        return None
 
-def scan_library(conn):
-    cursor = conn.cursor(); count = 0
-    print(f"Starting library scan in: {LIBRARY_DIR}")
-    for root, _, files in os.walk(LIBRARY_DIR):
-        if root.startswith(INBOX_DIR): continue
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS library (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_hash TEXT UNIQUE,
+            file_path TEXT,
+            added_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    conn.commit()
+    return conn
+
+def scan_library():
+    print(f"--- Starting Library Scan: {LIBRARY_DIR} ---")
+    conn = init_db()
+    cursor = conn.cursor()
+    
+    count = 0
+    new_entries = 0
+    
+    for root, dirs, files in os.walk(LIBRARY_DIR):
+        # Modify dirs in-place to skip excluded folders
+        dirs[:] = [d for d in dirs if d not in EXCLUDE_FOLDERS]
+        
         for file in files:
-            if file.lower().endswith(('.cbz', '.cbr')):
-                file_path = os.path.join(root, file); print(f"Processing: {file}")
-                file_size = os.path.getsize(file_path); file_hash = calculate_file_hash(file_path)
-                series_id, issue_id = extract_metadata_from_archive(file_path)
-                cursor.execute('INSERT OR REPLACE INTO comics (file_path, file_hash, file_size, series_id, issue_id) VALUES (?, ?, ?, ?, ?)',
-                               (file_path, file_hash, file_size, series_id, issue_id))
+            if file.lower().endswith(('.cbz', '.cbr', '.pdf', '.epub')):
+                full_path = os.path.join(root, file)
                 count += 1
-                if count % 100 == 0: conn.commit(); print(f"  ...processed {count} files...")
-    conn.commit(); print(f"\nScan complete! Processed {count} files.")
+                
+                print(f"Scanning: {file[:50].ljust(50)}", end='\r')
+                
+                f_hash = calculate_file_hash(full_path)
+                
+                if f_hash:
+                    cursor.execute("SELECT id FROM library WHERE file_hash = ?", (f_hash,))
+                    data = cursor.fetchone()
+                    
+                    if data is None:
+                        cursor.execute("INSERT INTO library (file_hash, file_path) VALUES (?, ?)", (f_hash, full_path))
+                        new_entries += 1
+                    else:
+                        cursor.execute("UPDATE library SET file_path = ? WHERE file_hash = ?", (full_path, f_hash))
+    
+    conn.commit()
+    conn.close()
+    print(f"\n\nScan Complete.")
+    print(f"Total Files in DB: {count}")
+    print(f"New/Updated: {new_entries}")
 
-if __name__ == '__main__':
-    if "/path/to/" in LIBRARY_DIR: sys.exit("Error: Please update the placeholder paths in the script before running.")
-    conn = create_database(); scan_library(conn); conn.close()
+if __name__ == "__main__":
+    scan_library()

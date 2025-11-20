@@ -1,125 +1,359 @@
 import os
-import subprocess
 import shutil
 import sys
-import sqlite3
+import subprocess
 import hashlib
-import logging
-import zipfile
-import rarfile
-import xml.etree.ElementTree as ET
-import fitz
+import sqlite3
+import time
 import re
+import zipfile
+from datetime import datetime
 
 # --- CONFIGURATION ---
-# PLEASE UPDATE THESE PATHS BEFORE RUNNING
-INBOX_DIR = "/path/to/your/inbox"
-LIBRARY_DIR = "/path/to/your/comic_library"
-QUARANTINE_DIR = "/path/to/your/quarantine_folder"
-PROJECT_DIR = os.path.dirname(os.path.abspath(__file__)) # Assumes DB is in the same folder as the script
-DB_FILE = os.path.join(PROJECT_DIR, "comics_library.db")
-LOG_FILE = os.path.join(PROJECT_DIR, "process_inbox.log")
-COMIC_TAGGER_EXE = "/path/to/your/venv/bin/comictagger"
-API_KEY_FILE = os.path.expanduser("~/.comic_vine_api_key")
+# Update these paths to match your environment
+INBOX_DIR = "/path/to/comics/inbox"
+LIBRARY_DIR = "/path/to/comics/library"
+QUARANTINE_DIR = "/path/to/comics/quarantine"
 
-logging.basicConfig(filename=LOG_FILE, level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s')
+# Path to your library database (created by build_library_db.py)
+DB_FILE = os.path.expanduser("~/scripts/comic-organizer/library.db")
+LOG_FILE = os.path.expanduser("~/scripts/comic-organizer/process_log.txt")
+
+# Path to comictagger executable (usually inside your venv bin)
+COMIC_TAGGER_BIN = os.path.expanduser("~/scripts/comic-organizer/venv/bin/comictagger")
+
+# ComicVine API Key (Get one at comicvine.gamespot.com/api)
+CV_API_KEY = "YOUR_API_KEY_HERE"
+
+# --- DEPENDENCY CHECK ---
+try:
+    import fitz  # PyMuPDF
+except ImportError:
+    print("Error: PyMuPDF not found. Install it via pip install PyMuPDF")
+try:
+    import rarfile
+except ImportError:
+    print("Error: rarfile not found. Install it via pip install rarfile")
 
 # --- HELPER FUNCTIONS ---
-def get_db_connection(): return sqlite3.connect(DB_FILE)
-def calculate_file_hash(file_path):
-    h=hashlib.md5();f=open(file_path,'rb');[h.update(c) for c in iter(lambda:f.read(4096),b"")];return h.hexdigest()
-def move_to_quarantine(file_path,reason):
-    if not os.path.exists(QUARANTINE_DIR): os.makedirs(QUARANTINE_DIR)
-    dest=os.path.join(QUARANTINE_DIR,os.path.basename(file_path)); shutil.move(file_path,dest)
-    logging.info(f"QUARANTINED | {dest} | {reason}")
-    print(f"Moved '{os.path.basename(file_path)}' to quarantine. Reason: {reason}")
-def add_to_library_db(file_path,metadata):
-    c=get_db_connection();s,h=os.path.getsize(file_path),calculate_file_hash(file_path)
-    c.execute('INSERT OR REPLACE INTO comics (file_path,file_hash,file_size,series_id,issue_id) VALUES (?,?,?,?,?)',(file_path,h,s,metadata.get('series_id'),metadata.get('issue_id')));c.commit();c.close()
-def extract_metadata_from_tagged_file(file_path):
-    metadata={};
+
+def log(message):
+    print(message)
     try:
-        if file_path.lower().endswith('.cbz'):
-            with zipfile.ZipFile(file_path,'r') as zf:
-                if 'ComicInfo.xml' in zf.namelist():
-                    with zf.open('ComicInfo.xml') as f:
-                        root=ET.fromstring(f.read());metadata['issue_id']=root.findtext('.//{*}IssueID');metadata['series']=root.findtext('.//{*}Series');metadata['year']=root.findtext('.//{*}Year');metadata['series_id']=root.findtext('.//{*}SeriesID')
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(LOG_FILE, "a") as f:
+            f.write(f"[{timestamp}] {message}\n")
     except: pass
-    return metadata
-def parse_metadata_from_filename(filename):
-    metadata={};
-    match=re.match(r'^(.*?) #?(\d+[.\d]*)\s*\((\d{4})\)',filename)
-    if match: metadata['series']=match.group(1).strip();metadata['year']=match.group(3).strip()
-    return metadata
-def convert_pdf_to_cbz(pdf_path):
-    cbz_path=os.path.join(os.path.dirname(pdf_path),f"{os.path.splitext(os.path.basename(pdf_path))[0]}.cbz");print(f"Converting PDF to CBZ...")
+
+def ensure_dirs():
+    if not os.path.exists(INBOX_DIR): os.makedirs(INBOX_DIR)
+    if not os.path.exists(QUARANTINE_DIR): os.makedirs(QUARANTINE_DIR)
+
+def calculate_file_hash(filepath):
+    """Calculates SHA256 hash of a file."""
+    sha256 = hashlib.sha256()
     try:
-        doc=fitz.open(pdf_path);
-        with zipfile.ZipFile(cbz_path,'w',zipfile.ZIP_DEFLATED) as zf:[zf.writestr(f"page_{i+1:03d}.png",p.get_pixmap(dpi=150).tobytes("png")) for i,p in enumerate(doc)]
-        doc.close();return cbz_path
+        with open(filepath, 'rb') as f:
+            for block in iter(lambda: f.read(65536), b''):
+                sha256.update(block)
+        return sha256.hexdigest()
     except: return None
 
-def process_inbox():
-    """Main function with the final fallback logic and bugfix."""
+def check_duplicate(file_hash):
+    """Checks if file hash exists in the library database."""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT file_path FROM library WHERE file_hash = ?", (file_hash,))
+    result = cursor.fetchone()
+    conn.close()
+    if result and os.path.exists(result[0]):
+        return result[0]
+    return None
+
+def is_comic_file(filepath):
+    ext = os.path.splitext(filepath)[1].lower()
+    return ext in ['.cbz', '.cbr', '.pdf']
+
+def is_image_file(filename):
+    ext = os.path.splitext(filename)[1].lower()
+    return ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp']
+
+def is_valid_archive(filepath):
+    """Validates that CBZ/CBR/PDF files are not corrupt."""
     try:
-        with open(os.path.expanduser(API_KEY_FILE), 'r') as f: cv_api_key = f.read().strip()
-    except FileNotFoundError: sys.exit("ERROR: API Key file not found.")
+        ext = os.path.splitext(filepath)[1].lower()
+        if ext == '.pdf':
+            doc = fitz.open(filepath)
+            valid = doc.page_count > 0
+            doc.close()
+            return valid
+        elif ext == '.cbz':
+            import zipfile
+            return zipfile.is_zipfile(filepath)
+        elif ext == '.cbr':
+            return rarfile.is_rarfile(filepath)
+    except:
+        return False
+    return True
 
-    if not os.path.exists(INBOX_DIR): os.makedirs(INBOX_DIR)
+def move_to_quarantine(filepath, reason_category):
+    """Moves problematic files to a Quarantine subfolder."""
+    try:
+        rel_path = os.path.relpath(os.path.dirname(filepath), INBOX_DIR)
+    except ValueError:
+        rel_path = ""
+    if rel_path == ".": rel_path = ""
+
+    dest_folder = os.path.join(QUARANTINE_DIR, reason_category, rel_path)
+    if not os.path.exists(dest_folder):
+        os.makedirs(dest_folder)
     
-    files = [f for f in os.listdir(INBOX_DIR) if os.path.isfile(os.path.join(INBOX_DIR, f))]
-    if not files: print("Inbox is empty."); return
-
-    print(f"Found {len(files)} files to process.")
-    for filename in files:
-        metadata = {} # Reset metadata for every single file to prevent stale data
+    filename = os.path.basename(filepath)
+    dest_path = os.path.join(dest_folder, filename)
+    
+    if os.path.exists(dest_path):
+        base, ext = os.path.splitext(filename)
+        dest_path = os.path.join(dest_folder, f"{base}_{int(time.time())}{ext}")
         
-        current_path = os.path.join(INBOX_DIR, filename)
+    shutil.move(filepath, dest_path)
+    log(f"QUARANTINED [{reason_category}]: {filename}")
+
+def move_to_library_fallback(filepath):
+    """
+    Fallback Mode: If tagging fails, move file to Library preserving its 
+    current folder structure instead of quarantining it.
+    """
+    try:
+        rel_path = os.path.relpath(os.path.dirname(filepath), INBOX_DIR)
+    except ValueError:
+        rel_path = ""
+    
+    if rel_path == ".": 
+        dest_dir = LIBRARY_DIR
+    else:
+        dest_dir = os.path.join(LIBRARY_DIR, rel_path)
+
+    if not os.path.exists(dest_dir):
+        os.makedirs(dest_dir)
         
-        if not filename.lower().endswith(('.cbz', '.cbr', '.pdf')): continue
+    filename = os.path.basename(filepath)
+    dest_path = os.path.join(dest_dir, filename)
+    
+    if os.path.exists(dest_path):
+        base, ext = os.path.splitext(filename)
+        dest_path = os.path.join(dest_dir, f"{base}_{int(time.time())}{ext}")
+    
+    shutil.move(filepath, dest_path)
+    log(f"Fallback: Moved to Library (Untagged): {os.path.join(rel_path, filename)}")
 
-        print("-" * 40); print(f"Processing: {filename}")
+def clean_empty_dirs(directory):
+    for root, dirs, files in os.walk(directory, topdown=False):
+        for name in dirs:
+            path = os.path.join(root, name)
+            try:
+                if not os.listdir(path):
+                    os.rmdir(path)
+            except: pass
 
-        if filename.lower().endswith('.pdf'):
-            new_path = convert_pdf_to_cbz(current_path)
-            if new_path: os.remove(current_path); current_path = new_path
-            else: move_to_quarantine(current_path, "PDF conversion failed"); continue
+def parse_metadata(output):
+    meta = {}
+    for line in output.splitlines():
+        if ":" in line:
+            parts = line.split(":", 1)
+            key = parts[0].strip().lower()
+            val = parts[1].strip()
+            meta[key] = val
+    return meta
+
+def sanitize_filename(name):
+    return re.sub(r'[<>:"/\\|?*]', '', name)
+
+def smart_rename_if_generic(filepath):
+    """Renames 'Issue #1.cbz' to 'ParentFolder #1.cbz' to help the scraper."""
+    filename = os.path.basename(filepath)
+    parent_dir = os.path.basename(os.path.dirname(filepath))
+    
+    if re.match(r'^(issue|chapter|\d+|#)', filename, re.IGNORECASE):
+        if parent_dir.lower() not in ['inbox', 'comics', 'download', 'completed']:
+            clean_fname = re.sub(r'^(issue\s*|chapter\s*)', '', filename, flags=re.IGNORECASE)
+            new_name = f"{parent_dir} #{clean_fname.lstrip('# ')}"
+            new_path = os.path.join(os.path.dirname(filepath), new_name)
+            try:
+                os.rename(filepath, new_path)
+                log(f"Auto-Renamed generic file: {filename} -> {new_name}")
+                return new_path
+            except: pass
+    return filepath
+
+def convert_folders_to_cbz(root_dir):
+    """Converts directories containing images into .cbz files."""
+    log("--- Scanning for folders to convert to CBZ ---")
+    for root, dirs, files in os.walk(root_dir):
+        images = [f for f in files if is_image_file(f)]
+        # If folder has images, no subdirs, and is not root
+        if images and not dirs and root != root_dir:
+            folder_name = os.path.basename(root)
+            cbz_name = f"{folder_name}.cbz"
+            cbz_path = os.path.join(os.path.dirname(root), cbz_name)
+            
+            if os.path.exists(cbz_path):
+                 cbz_path = os.path.join(os.path.dirname(root), f"{folder_name}_{int(time.time())}.cbz")
+
+            log(f"Packing folder to CBZ: {folder_name}...")
+            try:
+                with zipfile.ZipFile(cbz_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+                    for img in images:
+                        src_path = os.path.join(root, img)
+                        zf.write(src_path, arcname=img)
+                if zipfile.is_zipfile(cbz_path):
+                    log(f"  - Created: {cbz_name}")
+                    shutil.rmtree(root)
+                else:
+                    log("  - Error: Created ZIP appears invalid.")
+            except Exception as e:
+                log(f"  - Error packing CBZ: {e}")
+
+# --- MAIN PROCESS ---
+
+def process_file(filepath):
+    # 1. Filter Non-Comics
+    if not is_comic_file(filepath):
+        return
+
+    # 2. Smart Rename
+    filepath = smart_rename_if_generic(filepath)
+    filename = os.path.basename(filepath)
+    
+    log(f"Processing: {filename}")
+    TIMEOUT_SECONDS = 120
+
+    # 3. Integrity Check
+    if not is_valid_archive(filepath):
+        move_to_quarantine(filepath, "Corrupt_Archive")
+        return
+
+    # 4. Duplicate Check
+    f_hash = calculate_file_hash(filepath)
+    existing_path = check_duplicate(f_hash)
+    if existing_path:
+        log(f"Duplicate of: {existing_path}")
+        move_to_quarantine(filepath, "Duplicate")
+        return
+
+    ext = os.path.splitext(filepath)[1].lower()
+    
+    # 5. Handle PDFs (Move Only)
+    if ext == ".pdf":
+        pdf_folder = os.path.join(LIBRARY_DIR, "PDF_Comics")
+        if not os.path.exists(pdf_folder): os.makedirs(pdf_folder)
+        final_path = os.path.join(pdf_folder, filename)
+        if os.path.exists(final_path):
+             base, e = os.path.splitext(filename)
+             final_path = os.path.join(pdf_folder, f"{base}_{int(time.time())}{e}")
+        shutil.move(filepath, final_path)
+        log(f"PDF moved to: {final_path}")
+        return
+
+    # 6. Tagging (ComicTagger)
+    cmd_tag = [
+        COMIC_TAGGER_BIN, "-s", "--cv-api-key", CV_API_KEY, "--type", "cr", filepath
+    ]
+    
+    try:
+        result_tag = subprocess.run(cmd_tag, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        log("  - TIMEOUT: Processing took too long. Quarantining.")
+        move_to_quarantine(filepath, "Timeout_TooLarge")
+        return
+
+    output_combined = (result_tag.stdout + result_tag.stderr).lower()
+    
+    # Check Tagging Results
+    if result_tag.returncode != 0 or "multiple matches" in output_combined or "select from" in output_combined:
+        if "no match found" in output_combined:
+            log("  - No match found. Moving to Library as-is.")
+            move_to_library_fallback(filepath)
+            return
+        if "multiple matches" in output_combined or "select from" in output_combined:
+             log("  - Ambiguous Match. Moving to Library as-is.")
+             move_to_library_fallback(filepath)
+             return
+
+        # Script error or other failure
+        log(f"  - Tagging failed (Code {result_tag.returncode}). Moving to Library as-is.")
+        move_to_library_fallback(filepath)
+        return
+
+    # 7. Read Metadata & Move
+    cmd_read = [COMIC_TAGGER_BIN, "-p", filepath]
+    try:
+        result_read = subprocess.run(cmd_read, capture_output=True, text=True, timeout=30)
+    except subprocess.TimeoutExpired:
+        move_to_quarantine(filepath, "Timeout_Read")
+        return
+
+    meta = parse_metadata(result_read.stdout)
+    
+    publisher = sanitize_filename(meta.get('publisher', 'Unknown_Publisher'))
+    series = sanitize_filename(meta.get('series', 'Unknown_Series'))
+    volume = sanitize_filename(meta.get('volume', ''))
+    issue = sanitize_filename(meta.get('issue', ''))
+    year = sanitize_filename(meta.get('year', ''))
+    
+    if not series or series == "Unknown_Series":
+        log("  - Metadata incomplete. Moving to Library as-is.")
+        move_to_library_fallback(filepath)
+        return
+
+    # Construct Optimized Path
+    vol_str = f" v{volume}" if volume else ""
+    series_folder_name = f"{series}{vol_str}"
+    dest_dir = os.path.join(LIBRARY_DIR, publisher, series_folder_name)
+    
+    year_str = f" ({year})" if year else ""
+    new_filename = f"{series} #{issue}{year_str}{ext}"
+    
+    full_dest_path = os.path.join(dest_dir, new_filename)
+    
+    if not os.path.exists(dest_dir):
+        os.makedirs(dest_dir)
         
-        if calculate_file_hash(current_path) in [r[0] for r in get_db_connection().execute("SELECT file_hash FROM comics").fetchall()]:
-             move_to_quarantine(current_path, "Duplicate file detected"); continue
+    if os.path.exists(full_dest_path):
+         base, e = os.path.splitext(new_filename)
+         full_dest_path = os.path.join(dest_dir, f"{base}_{int(time.time())}{e}")
+    
+    try:
+        shutil.move(filepath, full_dest_path)
+        log(f"  - Success! Moved to: {full_dest_path}")
+    except Exception as e:
+        log(f"  - Move Failed: {e}")
+        move_to_quarantine(filepath, "Move_Failed")
 
-        print("Attempting to tag with comictagger...")
-        command = [COMIC_TAGGER_EXE, "-s", "-t", "CR", "-o", "-f", "--cv-api-key", cv_api_key, current_path]
-        subprocess.run(command, capture_output=True, text=True)
+def main():
+    ensure_dirs()
+    
+    # Step 1: Convert loose folders to CBZ
+    convert_folders_to_cbz(INBOX_DIR)
+    
+    # Step 2: Process Files
+    files_to_process = []
+    for root, dirs, files in os.walk(INBOX_DIR):
+        for f in files:
+            if f.startswith("."): continue
+            files_to_process.append(os.path.join(root, f))
+            
+    if not files_to_process:
+        log("Inbox empty.")
+        return
 
-        metadata = extract_metadata_from_tagged_file(current_path)
-
-        if not metadata.get('issue_id'):
-            print("Tagging failed. Falling back to filename parsing.")
-            filename_meta = parse_metadata_from_filename(os.path.basename(current_path))
-            if filename_meta:
-                metadata = filename_meta
-            else:
-                metadata['series'] = os.path.splitext(os.path.basename(current_path))[0]
-                metadata['year'] = '0'
-        else:
-            print("Tagging successful!")
-
-        if not metadata.get('series'):
-            move_to_quarantine(current_path, "Could not determine series name")
-            continue
-
-        try:
-            safe_series = metadata['series'].replace('/', '-').replace(':', '')
-            year_str = metadata.get('year', '0')
-            final_dir = os.path.join(LIBRARY_DIR, f"{safe_series} ({year_str})")
-            os.makedirs(final_dir, exist_ok=True)
-            final_path = os.path.join(final_dir, os.path.basename(current_path))
-            shutil.move(current_path, final_path)
-            print(f"Moved to: {final_path}")
-            add_to_library_db(final_path, metadata)
-        except Exception as e:
-            print(f"ERROR during move: {e}")
+    log(f"Found {len(files_to_process)} files in Inbox.")
+    
+    for path in files_to_process:
+        if os.path.exists(path):
+            process_file(path)
+            
+    clean_empty_dirs(INBOX_DIR)
+    log("Batch complete.")
 
 if __name__ == "__main__":
-    process_inbox()
+    main()
