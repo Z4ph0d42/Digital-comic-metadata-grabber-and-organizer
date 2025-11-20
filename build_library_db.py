@@ -6,7 +6,6 @@ import hashlib
 LIBRARY_DIR = "/path/to/comics/library"
 DB_FILE = "library.db"
 
-# Folders to ignore
 EXCLUDE_FOLDERS = {"inbox", "quarantine", "Inbox", "Quarantine", ".kavita", "System Volume Information"}
 
 def calculate_file_hash(filepath, block_size=65536):
@@ -43,7 +42,6 @@ def scan_library():
     new_entries = 0
     
     for root, dirs, files in os.walk(LIBRARY_DIR):
-        # Modify dirs in-place to skip excluded folders
         dirs[:] = [d for d in dirs if d not in EXCLUDE_FOLDERS]
         
         for file in files:

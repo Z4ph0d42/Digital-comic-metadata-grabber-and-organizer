@@ -39,7 +39,6 @@ def restore_category(category):
             continue
         shutil.move(src, dst)
     
-    # Clean up empty dir
     if not os.listdir(cat_path):
         os.rmdir(cat_path)
     print("Done.")
@@ -51,7 +50,7 @@ def main():
         print("1. Exit")
         print("2. Restore 'Tagging_Failed' to Inbox")
         print("3. Restore 'Untagged_Ambiguous' to Inbox")
-        print("4. Restore 'Corrupt_Archive' to Inbox (Only if you fixed them)")
+        print("4. Restore 'Corrupt_Archive' to Inbox")
         
         choice = input("\nSelect: ")
         

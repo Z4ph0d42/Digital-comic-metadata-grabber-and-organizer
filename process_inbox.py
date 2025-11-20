@@ -10,30 +10,30 @@ import zipfile
 from datetime import datetime
 
 # --- CONFIGURATION ---
-# Update these paths to match your environment
+# User must configure these paths
 INBOX_DIR = "/path/to/comics/inbox"
 LIBRARY_DIR = "/path/to/comics/library"
 QUARANTINE_DIR = "/path/to/comics/quarantine"
 
-# Path to your library database (created by build_library_db.py)
+# Database and Log paths
 DB_FILE = os.path.expanduser("~/scripts/comic-organizer/library.db")
 LOG_FILE = os.path.expanduser("~/scripts/comic-organizer/process_log.txt")
 
-# Path to comictagger executable (usually inside your venv bin)
+# Path to comictagger binary
 COMIC_TAGGER_BIN = os.path.expanduser("~/scripts/comic-organizer/venv/bin/comictagger")
 
-# ComicVine API Key (Get one at comicvine.gamespot.com/api)
+# ComicVine API Key
 CV_API_KEY = "YOUR_API_KEY_HERE"
 
-# --- DEPENDENCY CHECK ---
+# --- DEPENDENCIES ---
 try:
     import fitz  # PyMuPDF
 except ImportError:
-    print("Error: PyMuPDF not found. Install it via pip install PyMuPDF")
+    print("Warning: PyMuPDF not found. PDF support disabled.")
 try:
     import rarfile
 except ImportError:
-    print("Error: rarfile not found. Install it via pip install rarfile")
+    print("Warning: rarfile not found. CBR support limited.")
 
 # --- HELPER FUNCTIONS ---
 
@@ -50,7 +50,6 @@ def ensure_dirs():
     if not os.path.exists(QUARANTINE_DIR): os.makedirs(QUARANTINE_DIR)
 
 def calculate_file_hash(filepath):
-    """Calculates SHA256 hash of a file."""
     sha256 = hashlib.sha256()
     try:
         with open(filepath, 'rb') as f:
@@ -60,7 +59,6 @@ def calculate_file_hash(filepath):
     except: return None
 
 def check_duplicate(file_hash):
-    """Checks if file hash exists in the library database."""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute("SELECT file_path FROM library WHERE file_hash = ?", (file_hash,))
@@ -79,7 +77,6 @@ def is_image_file(filename):
     return ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp']
 
 def is_valid_archive(filepath):
-    """Validates that CBZ/CBR/PDF files are not corrupt."""
     try:
         ext = os.path.splitext(filepath)[1].lower()
         if ext == '.pdf':
@@ -97,7 +94,6 @@ def is_valid_archive(filepath):
     return True
 
 def move_to_quarantine(filepath, reason_category):
-    """Moves problematic files to a Quarantine subfolder."""
     try:
         rel_path = os.path.relpath(os.path.dirname(filepath), INBOX_DIR)
     except ValueError:
@@ -119,10 +115,7 @@ def move_to_quarantine(filepath, reason_category):
     log(f"QUARANTINED [{reason_category}]: {filename}")
 
 def move_to_library_fallback(filepath):
-    """
-    Fallback Mode: If tagging fails, move file to Library preserving its 
-    current folder structure instead of quarantining it.
-    """
+    """Fallback: Move to library preserving folder structure if tagging fails."""
     try:
         rel_path = os.path.relpath(os.path.dirname(filepath), INBOX_DIR)
     except ValueError:
@@ -169,7 +162,6 @@ def sanitize_filename(name):
     return re.sub(r'[<>:"/\\|?*]', '', name)
 
 def smart_rename_if_generic(filepath):
-    """Renames 'Issue #1.cbz' to 'ParentFolder #1.cbz' to help the scraper."""
     filename = os.path.basename(filepath)
     parent_dir = os.path.basename(os.path.dirname(filepath))
     
@@ -186,11 +178,9 @@ def smart_rename_if_generic(filepath):
     return filepath
 
 def convert_folders_to_cbz(root_dir):
-    """Converts directories containing images into .cbz files."""
     log("--- Scanning for folders to convert to CBZ ---")
     for root, dirs, files in os.walk(root_dir):
         images = [f for f in files if is_image_file(f)]
-        # If folder has images, no subdirs, and is not root
         if images and not dirs and root != root_dir:
             folder_name = os.path.basename(root)
             cbz_name = f"{folder_name}.cbz"
@@ -213,26 +203,62 @@ def convert_folders_to_cbz(root_dir):
             except Exception as e:
                 log(f"  - Error packing CBZ: {e}")
 
+def convert_pdf_to_cbz(pdf_path):
+    log(f"Converting PDF to CBZ: {os.path.basename(pdf_path)}...")
+    try:
+        doc = fitz.open(pdf_path)
+        cbz_path = os.path.splitext(pdf_path)[0] + ".cbz"
+        
+        if os.path.exists(cbz_path):
+             cbz_path = os.path.splitext(pdf_path)[0] + f"_{int(time.time())}.cbz"
+
+        with zipfile.ZipFile(cbz_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for i, page in enumerate(doc):
+                mat = fitz.Matrix(2.0, 2.0) 
+                pix = page.get_pixmap(matrix=mat)
+                img_data = pix.tobytes("jpg")
+                img_name = f"page_{i:04d}.jpg"
+                zf.writestr(img_name, img_data)
+        
+        doc.close()
+        
+        if zipfile.is_zipfile(cbz_path):
+            log(f"  - Conversion success. Removing original PDF.")
+            os.remove(pdf_path)
+            return cbz_path
+        else:
+            log("  - Error: Converted CBZ invalid.")
+            return None
+    except Exception as e:
+        log(f"  - PDF Conversion Failed: {e}")
+        return None
+
 # --- MAIN PROCESS ---
 
 def process_file(filepath):
-    # 1. Filter Non-Comics
     if not is_comic_file(filepath):
         return
 
-    # 2. Smart Rename
     filepath = smart_rename_if_generic(filepath)
     filename = os.path.basename(filepath)
     
     log(f"Processing: {filename}")
     TIMEOUT_SECONDS = 120
 
-    # 3. Integrity Check
     if not is_valid_archive(filepath):
         move_to_quarantine(filepath, "Corrupt_Archive")
         return
+        
+    ext = os.path.splitext(filepath)[1].lower()
+    if ext == ".pdf":
+        new_cbz = convert_pdf_to_cbz(filepath)
+        if new_cbz:
+            filepath = new_cbz 
+            filename = os.path.basename(filepath)
+        else:
+            move_to_quarantine(filepath, "PDF_Conversion_Failed")
+            return
 
-    # 4. Duplicate Check
     f_hash = calculate_file_hash(filepath)
     existing_path = check_duplicate(f_hash)
     if existing_path:
@@ -240,21 +266,7 @@ def process_file(filepath):
         move_to_quarantine(filepath, "Duplicate")
         return
 
-    ext = os.path.splitext(filepath)[1].lower()
-    
-    # 5. Handle PDFs (Move Only)
-    if ext == ".pdf":
-        pdf_folder = os.path.join(LIBRARY_DIR, "PDF_Comics")
-        if not os.path.exists(pdf_folder): os.makedirs(pdf_folder)
-        final_path = os.path.join(pdf_folder, filename)
-        if os.path.exists(final_path):
-             base, e = os.path.splitext(filename)
-             final_path = os.path.join(pdf_folder, f"{base}_{int(time.time())}{e}")
-        shutil.move(filepath, final_path)
-        log(f"PDF moved to: {final_path}")
-        return
-
-    # 6. Tagging (ComicTagger)
+    # Tagging
     cmd_tag = [
         COMIC_TAGGER_BIN, "-s", "--cv-api-key", CV_API_KEY, "--type", "cr", filepath
     ]
@@ -262,13 +274,12 @@ def process_file(filepath):
     try:
         result_tag = subprocess.run(cmd_tag, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
-        log("  - TIMEOUT: Processing took too long. Quarantining.")
+        log("  - TIMEOUT: Processing took too long.")
         move_to_quarantine(filepath, "Timeout_TooLarge")
         return
 
     output_combined = (result_tag.stdout + result_tag.stderr).lower()
     
-    # Check Tagging Results
     if result_tag.returncode != 0 or "multiple matches" in output_combined or "select from" in output_combined:
         if "no match found" in output_combined:
             log("  - No match found. Moving to Library as-is.")
@@ -279,12 +290,11 @@ def process_file(filepath):
              move_to_library_fallback(filepath)
              return
 
-        # Script error or other failure
         log(f"  - Tagging failed (Code {result_tag.returncode}). Moving to Library as-is.")
         move_to_library_fallback(filepath)
         return
 
-    # 7. Read Metadata & Move
+    # Read Metadata & Move
     cmd_read = [COMIC_TAGGER_BIN, "-p", filepath]
     try:
         result_read = subprocess.run(cmd_read, capture_output=True, text=True, timeout=30)
@@ -305,13 +315,13 @@ def process_file(filepath):
         move_to_library_fallback(filepath)
         return
 
-    # Construct Optimized Path
     vol_str = f" v{volume}" if volume else ""
     series_folder_name = f"{series}{vol_str}"
     dest_dir = os.path.join(LIBRARY_DIR, publisher, series_folder_name)
     
+    final_ext = os.path.splitext(filepath)[1].lower()
     year_str = f" ({year})" if year else ""
-    new_filename = f"{series} #{issue}{year_str}{ext}"
+    new_filename = f"{series} #{issue}{year_str}{final_ext}"
     
     full_dest_path = os.path.join(dest_dir, new_filename)
     
@@ -331,11 +341,8 @@ def process_file(filepath):
 
 def main():
     ensure_dirs()
-    
-    # Step 1: Convert loose folders to CBZ
     convert_folders_to_cbz(INBOX_DIR)
     
-    # Step 2: Process Files
     files_to_process = []
     for root, dirs, files in os.walk(INBOX_DIR):
         for f in files:
