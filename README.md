@@ -88,5 +88,6 @@ Text
 ├── Inbox          <-- Drop your messy downloads here
 ├── Library        <-- Clean, organized folders appear here
 └── Quarantine     <-- Broken files go here
+```
 Contributing
 Feel free to submit issues or pull requests.
