@@ -36,7 +36,6 @@ logging.basicConfig(filename=LOG_FILE, level=logging.INFO,
 
 # --- DATABASE AND HASH FUNCTIONS ---
 def calculate_file_hash(filepath):
-    """Generates a SHA256 hash to identify files regardless of their name."""
     sha256 = hashlib.sha256()
     try:
         with open(filepath, 'rb') as f:
@@ -48,7 +47,6 @@ def calculate_file_hash(filepath):
         return None
 
 def check_duplicate(file_hash):
-    """Checks the SQLite database for the file hash."""
     if not os.path.exists(DB_FILE):
         return None
     conn = sqlite3.connect(DB_FILE)
@@ -60,11 +58,10 @@ def check_duplicate(file_hash):
         if result and os.path.exists(result[0]):
             return result[0]
     except sqlite3.OperationalError:
-        pass # DB might not be initialized yet
+        pass
     return None
 
 def update_database(file_hash, filepath):
-    """Adds newly processed files to the database so they aren't processed again."""
     if not file_hash: return
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -86,8 +83,20 @@ def get_issue_number(filename):
     match = re.search(r'#(\d+)', filename)
     return match.group(1) if match else None
 
+def parse_metadata(output):
+    meta = {}
+    for line in output.splitlines():
+        if ":" in line:
+            parts = line.split(":", 1)
+            key = parts[0].strip().lower()
+            val = parts[1].strip()
+            meta[key] = val
+    return meta
+
+def sanitize_filename(name):
+    return re.sub(r'[<>:"/\\|?*]', '', name)
+
 def extract_archives():
-    """Auto-extracts bulk .rar and .zip uploads."""
     for item in os.listdir(INBOX):
         file_path = os.path.join(INBOX, item)
         if os.path.isdir(file_path): continue
@@ -122,7 +131,7 @@ def process_comics():
 
         original_name = os.path.basename(file_path)
         
-        # Hash Check BEFORE spending API calls!
+        # Hash Check
         f_hash = calculate_file_hash(file_path)
         existing_path = check_duplicate(f_hash)
         if existing_path:
@@ -133,11 +142,9 @@ def process_comics():
         folder_path = os.path.dirname(file_path)
         parent_folder_name = os.path.basename(folder_path)
         
-        # Mirror Logic
+        # Relative structure checking
         relative_structure = os.path.relpath(folder_path, INBOX)
-        if relative_structure == ".":
-            relative_structure = "Unsorted"
-            parent_folder_name = "Unsorted"
+        is_root_file = (relative_structure == ".")
 
         logging.info(f"Processing: {original_name} from folder [{relative_structure}]")
 
@@ -174,15 +181,54 @@ def process_comics():
 
         if not os.path.exists(processed_file): continue
 
-        target_dir = os.path.join(LIBRARY, relative_structure)
+        # --- SMART ROUTING LOGIC ---
+        target_dir = None
+        if is_root_file:
+            # Option 2a: Try reading embedded metadata first
+            meta_res = subprocess.run([TAGGER_BIN, "-p", processed_file], capture_output=True, text=True)
+            meta = parse_metadata(meta_res.stdout)
+            series = sanitize_filename(meta.get('series', ''))
+            volume = sanitize_filename(meta.get('volume', ''))
+            publisher = sanitize_filename(meta.get('publisher', ''))
+
+            # Option 2b: If no metadata, parse series name directly from the filename!
+            if not series or series.lower() == "unknown_series":
+                clean_name = os.path.splitext(new_filename)[0]
+                clean_name = re.sub(r'(?i)(#?\d+|\(\d{4}\)|getcomics|info|_|-|\.)', ' ', clean_name)
+                series = " ".join(clean_name.split()).title()
+                volume = "1"
+
+            if series and len(series) > 1:
+                vol_str = f" v{volume}" if volume and volume != "None" else ""
+                series_folder = f"{series}{vol_str}"
+                if publisher and publisher.lower() != "unknown_publisher":
+                    target_dir = os.path.join(LIBRARY, publisher, series_folder)
+                else:
+                    target_dir = os.path.join(LIBRARY, series_folder)
+                logging.info(f" - Smart-sorted loose file to '{series_folder}'")
+
+        # Fallback to Option 1 (Unsorted) only if everything else fails
+        if not target_dir:
+            if is_root_file:
+                target_dir = os.path.join(LIBRARY, "Unsorted")
+                logging.info(" - Smart-sort failed: Defaulted to 'Unsorted'")
+            else:
+                target_dir = os.path.join(LIBRARY, relative_structure)
+
         issue_num = get_issue_number(new_filename)
-        
+        if issue_num and os.path.exists(target_dir):
+            is_dup = any(f"#{issue_num}" in f for f in os.listdir(target_dir))
+            if is_dup:
+                logging.warning(f" - Duplicate detected for issue #{issue_num}. Quarantining.")
+                shutil.move(processed_file, os.path.join(DUPLICATES, new_filename))
+                continue
+
         if not os.path.exists(target_dir): os.makedirs(target_dir)
         
         final_dest = os.path.join(target_dir, new_filename)
         try:
             shutil.move(processed_file, final_dest)
-            update_database(f_hash, final_dest) # Add to DB so we never process it again!
+            update_database(f_hash, final_dest)
             logging.info(f" - Organized into: {target_dir}")
         except Exception as e:
             logging.error(f" - Move failed: {e}")
