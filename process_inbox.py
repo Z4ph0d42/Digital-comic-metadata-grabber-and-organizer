@@ -1,125 +1,198 @@
 import os
 import subprocess
 import shutil
-import sys
+import logging
+import requests
+import re
 import sqlite3
 import hashlib
-import logging
-import zipfile
-import rarfile
-import xml.etree.ElementTree as ET
-import fitz
-import re
 
 # --- CONFIGURATION ---
-# PLEASE UPDATE THESE PATHS BEFORE RUNNING
-INBOX_DIR = "/path/to/your/inbox"
-LIBRARY_DIR = "/path/to/your/comic_library"
-QUARANTINE_DIR = "/path/to/your/quarantine_folder"
-PROJECT_DIR = os.path.dirname(os.path.abspath(__file__)) # Assumes DB is in the same folder as the script
-DB_FILE = os.path.join(PROJECT_DIR, "comics_library.db")
-LOG_FILE = os.path.join(PROJECT_DIR, "process_inbox.log")
-COMIC_TAGGER_EXE = "/path/to/your/venv/bin/comictagger"
-API_KEY_FILE = os.path.expanduser("~/.comic_vine_api_key")
+INBOX = "/srv/comics/inbox"
+LIBRARY = "/srv/comics"
+DUPLICATES = "/srv/comics/duplicates"
+LOG_FILE = "/home/james/scripts/comic-organizer/process_log.txt"
+TAGGER_BIN = "/home/james/scripts/comic-organizer/venv/bin/comictagger"
+API_KEY = "f33a0650ac4c04e3c964c38f7e86f69723344bce"
+DB_FILE = "/home/james/scripts/comic-organizer/library.db"
 
-logging.basicConfig(filename=LOG_FILE, level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s')
+# Kavita Configuration
+KAVITA_URL = "http://192.168.2.51:5000"
+KAVITA_API_KEY = "db1210d2-8dfc-44fb-8a5d-ec1f22a08985"
 
-# --- HELPER FUNCTIONS ---
-def get_db_connection(): return sqlite3.connect(DB_FILE)
-def calculate_file_hash(file_path):
-    h=hashlib.md5();f=open(file_path,'rb');[h.update(c) for c in iter(lambda:f.read(4096),b"")];return h.hexdigest()
-def move_to_quarantine(file_path,reason):
-    if not os.path.exists(QUARANTINE_DIR): os.makedirs(QUARANTINE_DIR)
-    dest=os.path.join(QUARANTINE_DIR,os.path.basename(file_path)); shutil.move(file_path,dest)
-    logging.info(f"QUARANTINED | {dest} | {reason}")
-    print(f"Moved '{os.path.basename(file_path)}' to quarantine. Reason: {reason}")
-def add_to_library_db(file_path,metadata):
-    c=get_db_connection();s,h=os.path.getsize(file_path),calculate_file_hash(file_path)
-    c.execute('INSERT OR REPLACE INTO comics (file_path,file_hash,file_size,series_id,issue_id) VALUES (?,?,?,?,?)',(file_path,h,s,metadata.get('series_id'),metadata.get('issue_id')));c.commit();c.close()
-def extract_metadata_from_tagged_file(file_path):
-    metadata={};
+# Forced Series Mapping (ORDER MATTERS: Most specific to least specific)
+SERIES_MAP = {
+    "uncanny": "36402",    # Uncanny X-Force
+    "deadpool": "75151",   # Deadpool vs. X-Force
+    "x-statix": "10020",   # X-Statix
+    "she-hulk": "3960",    # Sensational She-Hulk
+    "v1": "4101",          # X-Force Vol 1 (1991)
+    "v2": "18165",         # X-Force Vol 2 (2004)
+    "v3": "20743"          # X-Force Vol 3 (2008)
+}
+
+logging.basicConfig(filename=LOG_FILE, level=logging.INFO, 
+                    format='[%(asctime)s] %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+
+# --- DATABASE AND HASH FUNCTIONS ---
+def calculate_file_hash(filepath):
+    """Generates a SHA256 hash to identify files regardless of their name."""
+    sha256 = hashlib.sha256()
     try:
-        if file_path.lower().endswith('.cbz'):
-            with zipfile.ZipFile(file_path,'r') as zf:
-                if 'ComicInfo.xml' in zf.namelist():
-                    with zf.open('ComicInfo.xml') as f:
-                        root=ET.fromstring(f.read());metadata['issue_id']=root.findtext('.//{*}IssueID');metadata['series']=root.findtext('.//{*}Series');metadata['year']=root.findtext('.//{*}Year');metadata['series_id']=root.findtext('.//{*}SeriesID')
-    except: pass
-    return metadata
-def parse_metadata_from_filename(filename):
-    metadata={};
-    match=re.match(r'^(.*?) #?(\d+[.\d]*)\s*\((\d{4})\)',filename)
-    if match: metadata['series']=match.group(1).strip();metadata['year']=match.group(3).strip()
-    return metadata
-def convert_pdf_to_cbz(pdf_path):
-    cbz_path=os.path.join(os.path.dirname(pdf_path),f"{os.path.splitext(os.path.basename(pdf_path))[0]}.cbz");print(f"Converting PDF to CBZ...")
-    try:
-        doc=fitz.open(pdf_path);
-        with zipfile.ZipFile(cbz_path,'w',zipfile.ZIP_DEFLATED) as zf:[zf.writestr(f"page_{i+1:03d}.png",p.get_pixmap(dpi=150).tobytes("png")) for i,p in enumerate(doc)]
-        doc.close();return cbz_path
-    except: return None
+        with open(filepath, 'rb') as f:
+            for block in iter(lambda: f.read(65536), b''):
+                sha256.update(block)
+        return sha256.hexdigest()
+    except Exception as e:
+        logging.error(f"Hash calculation failed for {filepath}: {e}")
+        return None
 
-def process_inbox():
-    """Main function with the final fallback logic and bugfix."""
+def check_duplicate(file_hash):
+    """Checks the SQLite database for the file hash."""
+    if not os.path.exists(DB_FILE):
+        return None
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
     try:
-        with open(os.path.expanduser(API_KEY_FILE), 'r') as f: cv_api_key = f.read().strip()
-    except FileNotFoundError: sys.exit("ERROR: API Key file not found.")
+        cursor.execute("SELECT file_path FROM library WHERE file_hash = ?", (file_hash,))
+        result = cursor.fetchone()
+        conn.close()
+        if result and os.path.exists(result[0]):
+            return result[0]
+    except sqlite3.OperationalError:
+        pass # DB might not be initialized yet
+    return None
 
-    if not os.path.exists(INBOX_DIR): os.makedirs(INBOX_DIR)
+def update_database(file_hash, filepath):
+    """Adds newly processed files to the database so they aren't processed again."""
+    if not file_hash: return
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('''CREATE TABLE IF NOT EXISTS library (id INTEGER PRIMARY KEY AUTOINCREMENT, file_hash TEXT UNIQUE, file_path TEXT, added_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+    cursor.execute("INSERT OR REPLACE INTO library (file_hash, file_path) VALUES (?, ?)", (file_hash, filepath))
+    conn.commit()
+    conn.close()
+
+def trigger_kavita_scan():
+    try:
+        url = f"{KAVITA_URL}/api/Library/scan-all"
+        headers = {'Authorization': f'Bearer {KAVITA_API_KEY}'}
+        requests.post(url, headers=headers)
+        logging.info("Triggered Kavita Library Scan.")
+    except Exception as e:
+        logging.error(f"Failed to trigger Kavita scan: {e}")
+
+def get_issue_number(filename):
+    match = re.search(r'#(\d+)', filename)
+    return match.group(1) if match else None
+
+def extract_archives():
+    """Auto-extracts bulk .rar and .zip uploads."""
+    for item in os.listdir(INBOX):
+        file_path = os.path.join(INBOX, item)
+        if os.path.isdir(file_path): continue
+            
+        if item.lower().endswith('.rar'):
+            logging.info(f"Auto-Extracting RAR: {item}")
+            result = subprocess.run(['unrar', 'x', '-y', file_path, f"{INBOX}/"], capture_output=True)
+            if result.returncode == 0: os.remove(file_path)
+                
+        elif item.lower().endswith('.zip'):
+            logging.info(f"Auto-Extracting ZIP: {item}")
+            result = subprocess.run(['unzip', '-o', file_path, '-d', INBOX], capture_output=True)
+            if result.returncode == 0: os.remove(file_path)
+
+def process_comics():
+    if not os.path.exists(DUPLICATES): os.makedirs(DUPLICATES)
     
-    files = [f for f in os.listdir(INBOX_DIR) if os.path.isfile(os.path.join(INBOX_DIR, f))]
-    if not files: print("Inbox is empty."); return
+    extract_archives()
+    
+    found_files = []
+    for root, dirs, files in os.walk(INBOX):
+        for file in files:
+            if file.endswith(('.cbz', '.cbr')):
+                found_files.append(os.path.join(root, file))
 
-    print(f"Found {len(files)} files to process.")
-    for filename in files:
-        metadata = {} # Reset metadata for every single file to prevent stale data
+    if not found_files:
+        print("Inbox is empty or has no comics.")
+        return
+
+    for file_path in found_files:
+        if not os.path.exists(file_path): continue
+
+        original_name = os.path.basename(file_path)
         
-        current_path = os.path.join(INBOX_DIR, filename)
-        
-        if not filename.lower().endswith(('.cbz', '.cbr', '.pdf')): continue
-
-        print("-" * 40); print(f"Processing: {filename}")
-
-        if filename.lower().endswith('.pdf'):
-            new_path = convert_pdf_to_cbz(current_path)
-            if new_path: os.remove(current_path); current_path = new_path
-            else: move_to_quarantine(current_path, "PDF conversion failed"); continue
-        
-        if calculate_file_hash(current_path) in [r[0] for r in get_db_connection().execute("SELECT file_hash FROM comics").fetchall()]:
-             move_to_quarantine(current_path, "Duplicate file detected"); continue
-
-        print("Attempting to tag with comictagger...")
-        command = [COMIC_TAGGER_EXE, "-s", "-t", "CR", "-o", "-f", "--cv-api-key", cv_api_key, current_path]
-        subprocess.run(command, capture_output=True, text=True)
-
-        metadata = extract_metadata_from_tagged_file(current_path)
-
-        if not metadata.get('issue_id'):
-            print("Tagging failed. Falling back to filename parsing.")
-            filename_meta = parse_metadata_from_filename(os.path.basename(current_path))
-            if filename_meta:
-                metadata = filename_meta
-            else:
-                metadata['series'] = os.path.splitext(os.path.basename(current_path))[0]
-                metadata['year'] = '0'
-        else:
-            print("Tagging successful!")
-
-        if not metadata.get('series'):
-            move_to_quarantine(current_path, "Could not determine series name")
+        # Hash Check BEFORE spending API calls!
+        f_hash = calculate_file_hash(file_path)
+        existing_path = check_duplicate(f_hash)
+        if existing_path:
+            logging.warning(f"DUPLICATE DETECTED by Hash: {original_name} matches {existing_path}. Quarantining.")
+            shutil.move(file_path, os.path.join(DUPLICATES, original_name))
             continue
 
+        folder_path = os.path.dirname(file_path)
+        parent_folder_name = os.path.basename(folder_path)
+        
+        # Mirror Logic
+        relative_structure = os.path.relpath(folder_path, INBOX)
+        if relative_structure == ".":
+            relative_structure = "Unsorted"
+            parent_folder_name = "Unsorted"
+
+        logging.info(f"Processing: {original_name} from folder [{relative_structure}]")
+
+        if original_name.endswith('.cbr'):
+            temp_path = file_path.replace('.cbr', '.cbz')
+            os.rename(file_path, temp_path)
+            file_path = temp_path
+
+        subprocess.run([TAGGER_BIN, "-d", "-t", "cr", file_path], capture_output=True)
+
+        forced_id = None
+        for key, cid in SERIES_MAP.items():
+            if key.lower() in parent_folder_name.lower():
+                forced_id = cid
+                break
+
+        files_before = set(os.listdir(folder_path))
+
+        tag_cmd = [TAGGER_BIN, "-s", "-f", "-o", "--cv-api-key", API_KEY, "--type", "cr", file_path]
+        if forced_id:
+            tag_cmd.insert(1, "--id")
+            tag_cmd.insert(2, forced_id)
+        subprocess.run(tag_cmd, capture_output=True)
+
+        files_after = set(os.listdir(folder_path))
+        added_files = list(files_after - files_before)
+
+        if added_files:
+            new_filename = added_files[0]
+            processed_file = os.path.join(folder_path, new_filename)
+        else:
+            new_filename = os.path.basename(file_path)
+            processed_file = file_path
+
+        if not os.path.exists(processed_file): continue
+
+        target_dir = os.path.join(LIBRARY, relative_structure)
+        issue_num = get_issue_number(new_filename)
+        
+        if not os.path.exists(target_dir): os.makedirs(target_dir)
+        
+        final_dest = os.path.join(target_dir, new_filename)
         try:
-            safe_series = metadata['series'].replace('/', '-').replace(':', '')
-            year_str = metadata.get('year', '0')
-            final_dir = os.path.join(LIBRARY_DIR, f"{safe_series} ({year_str})")
-            os.makedirs(final_dir, exist_ok=True)
-            final_path = os.path.join(final_dir, os.path.basename(current_path))
-            shutil.move(current_path, final_path)
-            print(f"Moved to: {final_path}")
-            add_to_library_db(final_path, metadata)
+            shutil.move(processed_file, final_dest)
+            update_database(f_hash, final_dest) # Add to DB so we never process it again!
+            logging.info(f" - Organized into: {target_dir}")
         except Exception as e:
-            print(f"ERROR during move: {e}")
+            logging.error(f" - Move failed: {e}")
+
+    subprocess.run(["find", INBOX, "-type", "d", "-empty", "-delete"])
+    subprocess.run(["sudo", "chown", "-R", "james:james", LIBRARY])
+    subprocess.run(["sudo", "chmod", "-R", "755", LIBRARY])
+    
+    trigger_kavita_scan()
+    print("Job Complete. Check the logs for details.")
 
 if __name__ == "__main__":
-    process_inbox()
+    process_comics()

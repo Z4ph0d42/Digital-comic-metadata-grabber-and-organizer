@@ -1,0 +1,18 @@
+# Python Environments
+venv/
+env/
+__pycache__/
+*.py[cod]
+
+# Databases
+*.db
+*.db.old
+*.sqlite3
+
+# Logs
+*.log
+*log.txt
+
+# Secrets & API Keys
+comicvine_api_key.txt
+.env
