@@ -124,6 +124,7 @@ def process_comics():
 
     if not found_files:
         print("Inbox is empty or has no comics.")
+        logging.info("Inbox empty.")
         return
 
     for file_path in found_files:
@@ -184,14 +185,12 @@ def process_comics():
         # --- SMART ROUTING LOGIC ---
         target_dir = None
         if is_root_file:
-            # Option 2a: Try reading embedded metadata first
             meta_res = subprocess.run([TAGGER_BIN, "-p", processed_file], capture_output=True, text=True)
             meta = parse_metadata(meta_res.stdout)
             series = sanitize_filename(meta.get('series', ''))
             volume = sanitize_filename(meta.get('volume', ''))
             publisher = sanitize_filename(meta.get('publisher', ''))
 
-            # Option 2b: If no metadata, parse series name directly from the filename!
             if not series or series.lower() == "unknown_series":
                 clean_name = os.path.splitext(new_filename)[0]
                 clean_name = re.sub(r'(?i)(#?\d+|\(\d{4}\)|getcomics|info|_|-|\.)', ' ', clean_name)
@@ -207,7 +206,6 @@ def process_comics():
                     target_dir = os.path.join(LIBRARY, series_folder)
                 logging.info(f" - Smart-sorted loose file to '{series_folder}'")
 
-        # Fallback to Option 1 (Unsorted) only if everything else fails
         if not target_dir:
             if is_root_file:
                 target_dir = os.path.join(LIBRARY, "Unsorted")
@@ -233,7 +231,9 @@ def process_comics():
         except Exception as e:
             logging.error(f" - Move failed: {e}")
 
-    subprocess.run(["find", INBOX, "-type", "d", "-empty", "-delete"])
+    # Clean empty subfolders while keeping the main INBOX directory intact (-mindepth 1)
+    subprocess.run(["find", INBOX, "-mindepth", "1", "-type", "d", "-empty", "-delete"])
+    
     subprocess.run(["sudo", "chown", "-R", "james:james", LIBRARY])
     subprocess.run(["sudo", "chmod", "-R", "755", LIBRARY])
     
