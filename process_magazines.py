@@ -69,10 +69,10 @@ def parse_magazine_metadata(filename):
     match_ym = re.search(r'(19\d{2}|20\d{2})[_\-](\d{1,2})', name_without_ext)
     if match_ym:
         year = match_ym.group(1)
-        month = str(int(match_ym.group(2))) # strip leading zero for internal storage
-        issue = f"{year}.{int(match_ym.group(2)):02d}"
+        month_val = int(match_ym.group(2))
+        month = str(month_val)
+        issue = str(month_val) # Issue number is just the month (1-12)
     else:
-        # Fallback year search
         year_match = re.search(r'\b(19\d{2}|20\d{2})\b', name_without_ext)
         if year_match: year = year_match.group(1)
         issue = "1"
@@ -118,15 +118,24 @@ def process_file(filepath):
     inject_comic_info_xml(filepath, meta)
     shutil.move(filepath, dest_path)
     update_database(f_hash, dest_path)
-    log(f"Moved: {filename} -> Issue {issue}")
 
 def main():
     ensure_dirs()
+    # Pull back to inbox, re-process
+    for root, dirs, files in os.walk(LIBRARY_DIR):
+        if os.path.basename(root) == "Omni":
+            for f in files:
+                if f.lower().endswith('.cbz'):
+                    shutil.move(os.path.join(root, f), os.path.join(INBOX_DIR, f))
+    
     for root, dirs, files in os.walk(INBOX_DIR):
         for f in files:
             if f.startswith("."): continue
             process_file(os.path.join(root, f))
+            
     subprocess.run(["find", INBOX_DIR, "-mindepth", "1", "-type", "d", "-empty", "-delete"])
+    if os.path.exists(os.path.join(LIBRARY_DIR, "Omni")) and not os.listdir(os.path.join(LIBRARY_DIR, "Omni")):
+        os.rmdir(os.path.join(LIBRARY_DIR, "Omni"))
 
 if __name__ == "__main__":
     main()
