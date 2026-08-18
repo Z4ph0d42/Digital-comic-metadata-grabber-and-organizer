@@ -103,7 +103,7 @@ def guess_series_name(filename):
         r' \bno\..*|'
         r' #\d.*|'
         r' \b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b.*|'
-        r' \b\d{1,4}\b\s*(?:19|20)\d{2}\b.*|'  # <-- NEW: Cuts off if it spots a lone number right before a year
+        r' \b\d{1,4}\b\s*(?:19|20)\d{2}\b.*|'
         r' (19|20)\d{2}\b.*|'
         r' \d{1,4}(-\d{1,4})?$'
         r')'
@@ -115,6 +115,7 @@ def guess_series_name(filename):
             clean_name = possible_name
 
     clean_name = re.sub(r'(?i)\b(magazine|quarterly|the hacker quarterly)\b', '', clean_name).strip()
+    clean_name = re.sub(r'(?i)^the\s+', '', clean_name).strip()
     clean_name = re.sub(r'[- ]+$', '', clean_name)
 
     return clean_name.title() if len(clean_name) > 1 else "Unknown Series"
@@ -228,7 +229,11 @@ def fill_metadata_gaps_with_ocr(filepath, meta):
 
     return meta
 
-def inject_comic_info_xml(cbz_path, meta):
+def inject_comic_info_xml(archive_path, meta):
+    if not archive_path.lower().endswith('.cbz'):
+        log(f"  - Skipping XML injection: {os.path.basename(archive_path)} is not a CBZ file.")
+        return
+
     xml_content = f"""<?xml version="1.0" encoding="utf-8"?>
 <ComicInfo xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
   <Series>{meta['series']}</Series>
@@ -240,13 +245,13 @@ def inject_comic_info_xml(cbz_path, meta):
 </ComicInfo>
 """
     try:
-        temp_zip = cbz_path + ".tmp"
-        with zipfile.ZipFile(cbz_path, 'r') as zin, zipfile.ZipFile(temp_zip, 'w', zipfile.ZIP_DEFLATED) as zout:
+        temp_zip = archive_path + ".tmp"
+        with zipfile.ZipFile(archive_path, 'r') as zin, zipfile.ZipFile(temp_zip, 'w', zipfile.ZIP_DEFLATED) as zout:
             for item in zin.infolist():
                 if item.filename.lower() != 'comicinfo.xml':
                     zout.writestr(item, zin.read(item.filename))
             zout.writestr('ComicInfo.xml', xml_content)
-        os.replace(temp_zip, cbz_path)
+        os.replace(temp_zip, archive_path)
         log(f"  - Injected ComicInfo.xml metadata successfully.")
     except Exception as e:
         log(f"  - Warning: Failed to inject ComicInfo.xml: {e}")
@@ -306,6 +311,10 @@ def process_file(filepath):
     series_name, year, month, issue, volume = parse_magazine_metadata(filename)
     if not is_root_file:
         series_name = os.path.basename(relative_structure)
+        # Apply standard cleaning to Inbox Override folders too!
+        series_name = re.sub(r'(?i)\b(magazine|quarterly|the hacker quarterly)\b', '', series_name).strip()
+        series_name = re.sub(r'(?i)^the\s+', '', series_name).strip()
+        series_name = series_name.title()
     else:
         series_name = find_best_library_match(series_name)
 
