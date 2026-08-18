@@ -111,29 +111,30 @@ def guess_series_name(filename):
     if match:
         possible_name = clean_name[:match.start()].strip()
         if len(possible_name) > 2:
-            return possible_name.title()
-    return clean_name.title()
+            clean_name = possible_name
+
+    # GLOBAL NOISE FILTER: Standardize series names immediately
+    clean_name = re.sub(r'(?i)\b(magazine|quarterly|the hacker quarterly)\b', '', clean_name).strip()
+    clean_name = re.sub(r'[- ]+$', '', clean_name)
+
+    return clean_name.title() if len(clean_name) > 1 else "Unknown Series"
 
 def find_best_library_match(guessed_name):
     if not os.path.exists(LIBRARY_DIR): return guessed_name
     existing_folders = [d for d in os.listdir(LIBRARY_DIR) if os.path.isdir(os.path.join(LIBRARY_DIR, d))]
     
-    clean_guess = re.sub(r'(?i)\b(magazine|quarterly|the)\b', '', guessed_name).strip()
-
+    # 1. Exact match against base folder names (ignoring volume suffixes)
     for folder in existing_folders:
         base_folder = re.sub(r'(?i)\s+v\d+.*$', '', folder).strip()
-        clean_folder = re.sub(r'(?i)\b(magazine|quarterly|the)\b', '', base_folder).strip()
-        
-        if clean_folder.lower() == clean_guess.lower() and len(clean_folder) > 1:
-            log(f"  - Canonical Match: '{guessed_name}' matched existing library folder '{folder}'")
-            # Return the base series name (e.g. "2600") rather than the folder with v40
-            return clean_folder
+        if base_folder.lower() == guessed_name.lower():
+            return base_folder
             
-    matches = difflib.get_close_matches(guessed_name, existing_folders, n=1, cutoff=0.6)
+    # 2. Fuzzy match against base folder names
+    base_folders = list(set([re.sub(r'(?i)\s+v\d+.*$', '', f).strip() for f in existing_folders]))
+    matches = difflib.get_close_matches(guessed_name, base_folders, n=1, cutoff=0.7)
     if matches:
-        matched_base = re.sub(r'(?i)\s+v\d+.*$', '', matches[0]).strip()
-        log(f"  - Fuzzy Matched '{guessed_name}' to existing library base '{matched_base}'")
-        return matched_base
+        log(f"  - Fuzzy Matched '{guessed_name}' to existing library base '{matches[0]}'")
+        return matches[0]
         
     return guessed_name
 
@@ -324,9 +325,11 @@ def process_file(filepath):
             move_to_quarantine(filepath, "PDF_Conversion_Failed")
             return
 
-    # Folder naming gets the volume suffix (e.g. "2600 v40") for clean disk separation
-    vol_str = f" v{meta['volume']}" if meta['volume'] and meta['volume'] != "None" else ""
-    series_folder_name = f"{meta['series']}{vol_str}"
+    if series_name in os.listdir(LIBRARY_DIR) and os.path.isdir(os.path.join(LIBRARY_DIR, series_name)):
+        series_folder_name = series_name
+    else:
+        vol_str = f" v{meta['volume']}" if meta['volume'] and meta['volume'] != "None" else ""
+        series_folder_name = f"{meta['series']}{vol_str}"
 
     dest_dir = os.path.join(LIBRARY_DIR, series_folder_name)
     if not os.path.exists(dest_dir): os.makedirs(dest_dir)
@@ -337,7 +340,6 @@ def process_file(filepath):
         dest_path = os.path.join(dest_dir, f"{base}_{int(time.time())}{ext}")
 
     try:
-        # XML metadata gets the CLEAN base series name so Kavita groups all volumes together under "2600"
         xml_meta = meta.copy()
         xml_meta['series'] = meta['series'] 
         
