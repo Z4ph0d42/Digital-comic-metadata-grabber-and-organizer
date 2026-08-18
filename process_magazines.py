@@ -103,6 +103,7 @@ def guess_series_name(filename):
         r' \bno\..*|'
         r' #\d.*|'
         r' \b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b.*|'
+        r' \b\d{1,4}\b\s*(?:19|20)\d{2}\b.*|'  # <-- NEW: Cuts off if it spots a lone number right before a year
         r' (19|20)\d{2}\b.*|'
         r' \d{1,4}(-\d{1,4})?$'
         r')'
@@ -113,7 +114,6 @@ def guess_series_name(filename):
         if len(possible_name) > 2:
             clean_name = possible_name
 
-    # GLOBAL NOISE FILTER: Standardize series names immediately
     clean_name = re.sub(r'(?i)\b(magazine|quarterly|the hacker quarterly)\b', '', clean_name).strip()
     clean_name = re.sub(r'[- ]+$', '', clean_name)
 
@@ -123,13 +123,11 @@ def find_best_library_match(guessed_name):
     if not os.path.exists(LIBRARY_DIR): return guessed_name
     existing_folders = [d for d in os.listdir(LIBRARY_DIR) if os.path.isdir(os.path.join(LIBRARY_DIR, d))]
     
-    # 1. Exact match against base folder names (ignoring volume suffixes)
     for folder in existing_folders:
         base_folder = re.sub(r'(?i)\s+v\d+.*$', '', folder).strip()
         if base_folder.lower() == guessed_name.lower():
             return base_folder
             
-    # 2. Fuzzy match against base folder names
     base_folders = list(set([re.sub(r'(?i)\s+v\d+.*$', '', f).strip() for f in existing_folders]))
     matches = difflib.get_close_matches(guessed_name, base_folders, n=1, cutoff=0.7)
     if matches:
