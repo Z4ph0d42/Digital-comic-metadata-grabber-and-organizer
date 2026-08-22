@@ -59,7 +59,6 @@ def update_database(file_hash, filepath):
     conn.close()
 
 def convert_pdf_to_cbz(pdf_path):
-    """Automatically converts an incoming PDF into a CBZ archive by rendering pages as images."""
     filename = os.path.basename(pdf_path)
     name_without_ext = os.path.splitext(filename)[0]
     cbz_path = os.path.join(INBOX_DIR, name_without_ext + ".cbz")
@@ -73,24 +72,21 @@ def convert_pdf_to_cbz(pdf_path):
         
         for page_num in range(len(doc)):
             page = doc[page_num]
-            pix = page.get_pixmap(dpi=150) # 150 DPI balances quality and file size for magazines
+            pix = page.get_pixmap(dpi=150)
             img_filename = f"page_{page_num+1:04d}.jpg"
             img_path = os.path.join(temp_dir, img_filename)
             pix.save(img_path)
             image_files.append(img_path)
         doc.close()
 
-        # Write images into a new uncompressed CBZ archive
         with zipfile.ZipFile(cbz_path, 'w', zipfile.ZIP_STORED) as zout:
             for img in image_files:
                 zout.write(img, os.path.basename(img))
         
-        # Cleanup temporary page images
         for img in image_files:
             os.remove(img)
         os.rmdir(temp_dir)
         
-        # Remove original PDF so it doesn't stay in the inbox unprocessed
         os.remove(pdf_path)
         log(f"Successfully converted {filename} -> {os.path.basename(cbz_path)}")
         return cbz_path
@@ -106,68 +102,82 @@ def parse_magazine_metadata(filename):
     month = ""
     issue = ""
     volume = ""
-    series = "Magazines" # Generic fallback if series isn't matched
+    series = ""
+    
+    # Dictionary to map spelled-out months to issue numbers
+    month_map = {"january": "1", "february": "2", "march": "3", "april": "4", "may": "5", "june": "6", "july": "7", "august": "8", "september": "9", "october": "10", "november": "11", "december": "12", "jan": "1", "feb": "2", "mar": "3", "apr": "4", "jun": "6", "jul": "7", "aug": "8", "sep": "9", "oct": "10", "nov": "11", "dec": "12"}
 
-    # Check for specific title formats or default naming
-    if "Scientific_American" in name_without_ext:
-        series = "Scientific American"
-    elif "Lain" in name_without_ext:
-        series = "Lain Wingraphic"
-    elif "Omni" in name_without_ext or name_without_ext.startswith("OMNI"):
-        series = "Omni"
+    # Specific Overrides
+    if "Scientific_American" in name_without_ext: series = "Scientific American"
+    elif "Lain" in name_without_ext: series = "Lain Wingraphic"
+    elif "Omni" in name_without_ext or name_without_ext.startswith("OMNI"): series = "Omni"
 
-    # Match Title_Issue_Year format
+    # 1. Match Title_Issue_Year (Best_of_OMNI_4_1982)
     match_special = re.search(r'(?i)^(.*?)_(\d+)_((?:19|20)\d{2})$', name_without_ext)
     if match_special:
-        series = match_special.group(1).replace('_', ' ').strip().title()
+        if not series: series = match_special.group(1).replace('_', ' ').strip().title()
         issue = match_special.group(2)
-        month = issue 
         year = match_special.group(3)
         return series, year, month, issue, volume
 
-    # Match standard YYYY_MM or vYYYY #MM
-    match_ym = re.search(r'(?i)^(.*?)[_\s]+v?(19\d{2}|20\d{2})[_\s\-#]+(\d{1,2})$', name_without_ext)
+    # 2. NEW: Match Title_MonthName_Year (Fortean_Times_March_2016)
+    match_month = re.search(r'(?i)^(.*?)_([a-zA-Z]+)_((?:19|20)\d{2})$', name_without_ext)
+    if match_month and match_month.group(2).lower() in month_map:
+        if not series: series = match_month.group(1).replace('_', ' ').strip().title()
+        month = month_map[match_month.group(2).lower()]
+        issue = month
+        year = match_month.group(3)
+        return series, year, month, issue, volume
+
+    # 3. Match standard YYYY_MM or vYYYY #MM
+    match_ym = re.search(r'(?i)^(.*?)[_\s]+v?(19\d{2}|20\d{2})[_\s\-#]+(\d{1,2})', name_without_ext)
     if match_ym:
         extracted_series = match_ym.group(1).replace('_', ' ').strip().title()
-        if extracted_series:
-            series = extracted_series
+        if not series and extracted_series: series = extracted_series
         year = match_ym.group(2)
-        month_val = int(match_ym.group(3))
-        month = str(month_val)
-        issue = str(month_val)
-    else:
-        # Fallback year extractor
-        year_match = re.search(r'\b(19\d{2}|20\d{2})\b', name_without_ext)
-        if year_match: year = year_match.group(1)
-        issue = "1"
+        month = str(int(match_ym.group(3)))
+        issue = month
+        return series, year, month, issue, volume
+
+    # 4. Ultimate Fallback for messy strings (BYTE_Vol_06-09_1981...)
+    year_match = re.search(r'\b(19\d{2}|20\d{2})\b', name_without_ext)
+    if year_match: year = year_match.group(1)
+    
+    if not series:
+        # Strip everything after 'Vol', 'Issue', or the Year to isolate the title dynamically
+        clean_title = re.split(r'(?i)[_\s]*(vol|issue|#|(19|20)\d{2})', name_without_ext)[0]
+        series = clean_title.replace('_', ' ').strip().title()
+        if not series: series = "Unsorted Magazines"
 
     return series, year, month, issue, volume
 
 def inject_comic_info_xml(archive_path, meta):
     if not archive_path.lower().endswith('.cbz'): return
+    
+    # Only inject tags if they exist to prevent forced issue #1 stacking on unrecognized files
+    issue_tag = f"\n  <Number>{meta['issue']}</Number>" if meta['issue'] else ""
+    vol_tag = f"\n  <Volume>{meta['volume']}</Volume>" if meta['volume'] else ""
+    year_tag = f"\n  <Year>{meta['year']}</Year>" if meta['year'] else ""
+    month_tag = f"\n  <Month>{meta['month']}</Month>" if meta['month'] else ""
+    
     xml_content = f"""<?xml version="1.0" encoding="utf-8"?>
 <ComicInfo xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-  <Series>{meta['series']}</Series>
-  <Number>{meta['issue']}</Number>
-  <Volume>{meta['volume']}</Volume>
-  <Year>{meta['year']}</Year>
-  <Month>{meta['month']}</Month>
+  <Series>{meta['series']}</Series>{issue_tag}{vol_tag}{year_tag}{month_tag}
   <Publisher>Magazine Publications</Publisher>
-</ComicInfo>
-"""
+</ComicInfo>"""
+
     try:
         temp_zip = archive_path + ".tmp"
         with zipfile.ZipFile(archive_path, 'r') as zin, zipfile.ZipFile(temp_zip, 'w', zipfile.ZIP_STORED) as zout:
             for item in zin.infolist():
                 if item.filename.lower() != 'comicinfo.xml':
                     zout.writestr(item, zin.read(item.filename))
-            zout.writestr('ComicInfo.xml', xml_content)
+            zout.writestr('ComicInfo.xml', xml_content.strip())
         os.replace(temp_zip, archive_path)
     except Exception as e:
         log(f"XML Injection failed: {e}")
 
 def process_file(filepath):
-    # Handle PDF conversion first
     if filepath.lower().endswith('.pdf'):
         filepath = convert_pdf_to_cbz(filepath)
         if not filepath: return
@@ -182,9 +192,10 @@ def process_file(filepath):
     dest_dir = os.path.join(LIBRARY_DIR, series)
     if not os.path.exists(dest_dir): os.makedirs(dest_dir)
 
-    if year and month:
-        month_padded = str(month).zfill(2) 
-        new_filename = f"{series} v{year} #{month_padded}.cbz"
+    # Apply Kavita-friendly naming only if year and issue exist cleanly
+    if year and issue:
+        issue_padded = str(issue).zfill(2) 
+        new_filename = f"{series} v{year} #{issue_padded}.cbz"
     else:
         new_filename = filename 
 
@@ -197,12 +208,11 @@ def process_file(filepath):
 
 def main():
     ensure_dirs()
-    
     for root, dirs, files in os.walk(INBOX_DIR):
         for f in files:
             if f.startswith("."): continue
             process_file(os.path.join(root, f))
-
+            
     subprocess.run(["find", INBOX_DIR, "-mindepth", "1", "-type", "d", "-empty", "-delete"])
     
     for d in os.listdir(LIBRARY_DIR):
