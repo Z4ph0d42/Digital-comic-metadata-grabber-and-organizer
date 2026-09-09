@@ -1,0 +1,14 @@
+{
+  "paths": {
+    "inbox": "./inbox",
+    "library": "./library",
+    "duplicates": "./duplicates"
+  },
+  "kavita": {
+    "url": "http://localhost:5000",
+    "api_key": "YOUR_KAVITA_API_KEY_HERE"
+  },
+  "comicvine": {
+    "api_key": "YOUR_COMICVINE_API_KEY_HERE"
+  }
+}
