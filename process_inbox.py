@@ -68,8 +68,13 @@ def update_database(file_hash, filepath):
 
 def trigger_kavita_scan():
     try:
+        auth_url = f"{KAVITA_URL}/api/Plugin/authenticate"
+        auth_resp = requests.post(auth_url, params={'apiKey': KAVITA_API_KEY, 'pluginName': 'comic-organizer'})
+        auth_resp.raise_for_status()
+        token = auth_resp.json()['token']
         url = f"{KAVITA_URL}/api/Library/scan-all"
-        requests.post(url, headers={'Authorization': f'Bearer {KAVITA_API_KEY}'})
+        scan_resp = requests.post(url, headers={'Authorization': f'Bearer {token}'})
+        scan_resp.raise_for_status()
         logging.info("Triggered Kavita Library Scan.")
     except Exception as e:
         logging.error(f"Failed to trigger Kavita scan: {e}")
