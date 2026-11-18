@@ -114,10 +114,6 @@ def process_comics():
         is_root_file = (relative_structure == ".")
         logging.info(f"Processing: {original_name}")
 
-        if original_name.endswith('.cbr'):
-            temp_path = file_path.replace('.cbr', '.cbz')
-            os.rename(file_path, temp_path)
-            file_path = temp_path
 
         files_before = set(os.listdir(folder_path))
 
